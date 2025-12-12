@@ -22,7 +22,13 @@ export default defineConfig(({ mode }) => {
     // In production builds, these will be empty strings to ensure no API keys are bundled
     const isDevelopment = mode === 'development';
     
+    // Base path for GitHub Pages deployment
+    // If your repo is username.github.io/repo-name, set BASE_PATH=/repo-name/
+    // For custom domains or username.github.io (root), leave it as '/' or unset
+    const base = env.BASE_PATH || '/';
+    
     return {
+      base,
       server: {
         port: 3000,
         host: '0.0.0.0',

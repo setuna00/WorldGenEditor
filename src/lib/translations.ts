@@ -1156,9 +1156,6 @@ const UI_STRINGS: Record<string, Record<Language, string>> = {
 
     // --- Forge Extended ---
     'forge.usingModel': { English: 'Using Model', Chinese: '使用模型' },
-    'forge.length.short': { English: 'Short', Chinese: '短' },
-    'forge.length.medium': { English: 'Medium', Chinese: '中' },
-    'forge.length.long': { English: 'Long', Chinese: '长' },
     'forge.placeholder.mustContain': { English: 'e.g. fire, ancient', Chinese: '例如：fire, ancient' },
     'forge.placeholder.mustAvoid': { English: 'e.g. futuristic', Chinese: '例如：futuristic' },
 
