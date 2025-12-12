@@ -28,6 +28,28 @@ interface UIField {
 const SYSTEM_CATEGORIES = ['System', 'Core'];
 const POOL_CATEGORIES = ['General'];
 
+// Helper to translate category names
+const translateCategory = (category: string, s: (key: string) => string): string => {
+    switch (category) {
+        case 'General': return s('componentManager.category.general');
+        case 'System': return s('componentManager.category.system');
+        case 'Core': return s('componentManager.category.core');
+        default: return category;
+    }
+};
+
+// Helper to translate rarity labels
+const translateRarity = (rarity: string, s: (key: string) => string): string => {
+    switch (rarity) {
+        case 'Common': return s('componentManager.rarity.common');
+        case 'Uncommon': return s('componentManager.rarity.uncommon');
+        case 'Rare': return s('componentManager.rarity.rare');
+        case 'Epic': return s('componentManager.rarity.epic');
+        case 'Legendary': return s('componentManager.rarity.legendary');
+        default: return rarity;
+    }
+};
+
 export const ComponentManager: React.FC = () => {
     const { currentWorld, worldManager, refreshWorld } = useWorld();
     const { toast } = useToast();
@@ -220,7 +242,7 @@ export const ComponentManager: React.FC = () => {
     const addField = () => {
         setEditFields([...editFields, { 
             _uiId: crypto.randomUUID(), 
-            key: 'new_field', 
+            key: s('componentManager.newFieldDefault'), 
             type: 'text', 
             defaultValue: '', 
             options: [] 
@@ -253,10 +275,10 @@ export const ComponentManager: React.FC = () => {
 
     const addOption = (fIdx: number) => {
         const n = [...editFields];
-        let baseName = 'New Option';
+        let baseName = s('componentManager.newOption');
         let counter = 1;
         while (n[fIdx].options.includes(baseName)) {
-            baseName = `New Option ${counter++}`;
+            baseName = `${s('componentManager.newOption')} ${counter++}`;
         }
         n[fIdx].options.push(baseName);
         setEditFields(n);
@@ -279,7 +301,7 @@ export const ComponentManager: React.FC = () => {
     const addRarityLevel = () => {
         setRarityLevels([...rarityLevels, { 
             id: crypto.randomUUID(), 
-            label: 'New Tier', 
+            label: s('componentManager.newTier'), 
             weight: 10, 
             color: '#64748b' 
         }]);
@@ -308,10 +330,10 @@ export const ComponentManager: React.FC = () => {
                     className="w-full bg-nexus-900 border border-slate-600 rounded p-2.5 text-sm text-slate-200 outline-none focus:border-nexus-accent appearance-none cursor-pointer"
                 >
                     {SYSTEM_CATEGORIES.includes(newCompCategory) && (
-                        <option value={newCompCategory}>{newCompCategory} (System)</option>
+                        <option value={newCompCategory}>{translateCategory(newCompCategory, s)} ({s('componentManager.category.systemTag')})</option>
                     )}
                     {availableCategories.map(c => (
-                        <option key={c} value={c}>{c}</option>
+                        <option key={c} value={c}>{translateCategory(c, s)}</option>
                     ))}
                 </select>
                 <div className="absolute right-3 top-3 pointer-events-none text-slate-500">
@@ -331,7 +353,7 @@ export const ComponentManager: React.FC = () => {
                     <div>
                         <h4 className="font-bold text-blue-200 text-sm">{s('componentManager.probabilityEngine')}</h4>
                         <p className="text-xs text-blue-300/70">
-                            Define tiers. Weights determine roll probability automatically.
+                            {s('componentManager.probabilityDesc')}
                             {s('componentManager.totalWeight')} <span className="font-mono text-white">{totalWeight}</span>
                         </p>
                     </div>
@@ -372,7 +394,7 @@ export const ComponentManager: React.FC = () => {
                         );
                     })}
                     <button onClick={addRarityLevel} className="w-full py-2 border border-dashed border-slate-700 rounded text-xs text-slate-500 hover:text-white hover:border-slate-500 transition-colors flex justify-center items-center gap-2">
-                        <Plus size={14} /> Add Rarity Tier
+                        <Plus size={14} /> {s('componentManager.addRarityTier')}
                     </button>
                 </div>
             </div>
@@ -386,7 +408,7 @@ export const ComponentManager: React.FC = () => {
                 <div className="text-sm">
                     <strong className="text-yellow-200 block mb-1">{s('componentManager.systemComponent')}</strong>
                     <span className="text-yellow-200/70">
-                        This component defines critical entity identity. Schema fields are visible for reference but cannot be modified to prevent database corruption.
+                        {s('componentManager.systemComponentDesc')}
                     </span>
                 </div>
             </div>
@@ -417,8 +439,8 @@ export const ComponentManager: React.FC = () => {
                         value={String(field.defaultValue)} 
                         onChange={e => updateField(i, 'defaultValue', e.target.value)}
                     >
-                        <option value="false">False</option>
-                        <option value="true">True</option>
+                        <option value="false">{s('componentManager.false')}</option>
+                        <option value="true">{s('componentManager.true')}</option>
                     </NexusSelect>
                 );
             case 'select':
@@ -428,7 +450,7 @@ export const ComponentManager: React.FC = () => {
                         value={String(field.defaultValue)}
                         onChange={e => updateField(i, 'defaultValue', e.target.value)}
                     >
-                        <option value="">-- Select Default --</option>
+                        <option value="">{s('componentManager.selectDefault')}</option>
                         {field.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </NexusSelect>
                 );
@@ -479,10 +501,10 @@ export const ComponentManager: React.FC = () => {
         <div className="space-y-4 animate-in fade-in">
              <div className="flex justify-between items-center border-b border-slate-700 pb-2">
                 <h3 className="font-bold text-slate-200 text-sm uppercase tracking-wider flex items-center gap-2">
-                    <GripVertical size={14} /> Schema Fields
+                    <GripVertical size={14} /> {s('componentManager.schemaFields')}
                 </h3>
                 <button onClick={addField} className="text-xs font-bold text-nexus-accent hover:text-white flex items-center gap-1 bg-nexus-900 px-3 py-1.5 rounded border border-nexus-accent/30 hover:bg-nexus-accent transition-colors">
-                    <Plus size={12} /> Add Field
+                    <Plus size={12} /> {s('componentManager.addField')}
                 </button>
             </div>
             
@@ -493,15 +515,15 @@ export const ComponentManager: React.FC = () => {
                          <div className="flex flex-col gap-4 mb-2">
                              <div className="flex gap-4">
                                 <div className="flex-1">
-                                    <NexusInput label={s('componentManager.fieldKey')} value={field.key} onChange={e => updateField(i, 'key', e.target.value)} className="font-mono" placeholder="property_name" />
+                                    <NexusInput label={s('componentManager.fieldKey')} value={field.key} onChange={e => updateField(i, 'key', e.target.value)} className="font-mono" placeholder={s('componentManager.propertyNamePlaceholder')} />
                                 </div>
                                 <div className="w-40">
                                     <NexusSelect label={s('componentManager.dataType')} value={field.type} onChange={e => updateField(i, 'type', e.target.value)}>
-                                        <option value="text">Text (String)</option>
-                                        <option value="number">Number</option>
-                                        <option value="boolean">Boolean</option>
-                                        <option value="date">Date</option>
-                                        <option value="select">Select Menu</option>
+                                        <option value="text">{s('componentManager.textString')}</option>
+                                        <option value="number">{s('componentManager.number')}</option>
+                                        <option value="boolean">{s('componentManager.boolean')}</option>
+                                        <option value="date">{s('componentManager.date')}</option>
+                                        <option value="select">{s('componentManager.selectMenu')}</option>
                                     </NexusSelect>
                                 </div>
                              </div>
@@ -525,7 +547,7 @@ export const ComponentManager: React.FC = () => {
                                          </div>
                                      ))}
                                      <button onClick={() => addOption(i)} className="text-xs bg-nexus-accent/20 text-nexus-accent px-2 rounded border border-nexus-accent/30 hover:bg-nexus-accent hover:text-white transition-colors">
-                                         + Add Option
+                                         + {s('componentManager.addOption')}
                                      </button>
                                  </div>
                              </div>
@@ -541,7 +563,7 @@ export const ComponentManager: React.FC = () => {
             <div className="w-64 bg-nexus-800 border border-slate-700 rounded-xl flex flex-col overflow-hidden shadow-lg shrink-0">
                 <div className="p-4 bg-nexus-900 border-b border-slate-700 flex justify-between items-center">
                     <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                        <Cuboid size={14} className="text-nexus-accent"/> Registry
+                        <Cuboid size={14} className="text-nexus-accent"/> {s('componentManager.registry')}
                     </h3>
                     <button onClick={handleCreateNew} className="text-nexus-accent hover:text-white p-1 rounded hover:bg-slate-800 transition-colors">
                         <Plus size={16} />
@@ -551,7 +573,7 @@ export const ComponentManager: React.FC = () => {
                     {Object.entries(groupedComponents).map(([category, items]) => (
                         <div key={category}>
                             <div className="px-2 mb-1 text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
-                                <Folder size={10} /> {category}
+                                <Folder size={10} /> {translateCategory(category, s)}
                             </div>
                             <div className="space-y-1">
                                 {items.map(def => (
@@ -589,45 +611,43 @@ export const ComponentManager: React.FC = () => {
                     <div>
                         <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-3">
                              {editingDef ? (
-                                 <><Edit3 size={24} className="text-nexus-accent"/> Edit Schema: <span className="text-white">{editingDef.label}</span></>
+                                 <><Edit3 size={24} className="text-nexus-accent"/> {s('componentManager.editSchema')} <span className="text-white">{editingDef.label}</span></>
                              ) : (
-                                 <><Plus size={24} className="text-nexus-accent"/> Create Component</>
+                                 <><Plus size={24} className="text-nexus-accent"/> {s('componentManager.createComponent')}</>
                              )}
                         </h2>
                         <div className="flex gap-2 mt-1">
-                            {editingDef?.isCore && <span className="text-xs bg-purple-500/20 text-purple-300 px-2 rounded border border-purple-500/30 uppercase font-bold">System Core</span>}
-                            <span className="text-xs text-slate-500 font-mono">ID: {editingDef ? editingDef.id : 'new_component'}</span>
+                            {editingDef?.isCore && <span className="text-xs bg-purple-500/20 text-purple-300 px-2 rounded border border-purple-500/30 uppercase font-bold">{s('componentManager.systemCore')}</span>}
+                            <span className="text-xs text-slate-500 font-mono">{s('componentManager.id')}: {editingDef ? editingDef.id : s('componentManager.newComponent')}</span>
                         </div>
                     </div>
                     {editingDef?.id !== 'metadata' && (
-                        <NexusButton onClick={handleSave} icon={<Save size={16} />}>Save Definition</NexusButton>
+                        <NexusButton onClick={handleSave} icon={<Save size={16} />}>{s('componentManager.saveDefinition')}</NexusButton>
                     )}
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-8 space-y-6">
                     <div className="bg-nexus-950/50 p-4 rounded-lg border border-slate-800 mb-4 text-xs text-slate-400">
-                        <strong className="text-nexus-accent">Developer Note:</strong> This is a low-level schema editor. 
-                        Changes made here affect how the database stores data. 
-                        To change how entities interact, use the <strong>Pool Configuration</strong> or <strong>Rules</strong> engine.
+                        <strong className="text-nexus-accent">{s('componentManager.developerNote')}</strong> {s('componentManager.developerNoteText')}
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 max-w-2xl">
                         <NexusInput 
-                            label="Component Label" 
+                            label={s('componentManager.componentLabel')} 
                             value={newCompName} 
                             onChange={e => setNewCompName(e.target.value)}
                             disabled={editingDef?.isCore}
-                            placeholder="e.g. Combat Stats"
+                            placeholder={s('componentManager.componentLabelPlaceholder')}
                         />
                          {renderCategorySelector()}
                     </div>
 
                     <div className="max-w-2xl">
                         <NexusTextArea 
-                            label="AI Context Description"
+                            label={s('componentManager.aiContextDescription')}
                             value={newCompDesc}
                             onChange={e => setNewCompDesc(e.target.value)}
-                            placeholder="Explain to the AI what this component represents (e.g. 'Physical attributes determining damage output')..."
+                            placeholder={s('componentManager.aiContextPlaceholder')}
                             className="h-20 text-xs"
                         />
                     </div>
@@ -645,25 +665,25 @@ export const ComponentManager: React.FC = () => {
             <NexusModal
                 isOpen={!!deleteCandidate}
                 onClose={() => { setDeleteCandidate(null); setDeleteReport(null); }}
-                title={<span className="flex items-center gap-2 text-red-400"><AlertTriangle size={20}/> Delete Component</span>}
+                title={<span className="flex items-center gap-2 text-red-400"><AlertTriangle size={20}/> {s('componentManager.deleteComponent')}</span>}
             >
                 <div className="space-y-4">
                     <p className="text-slate-300 text-sm">
-                        Permanently delete <strong>{deleteCandidate}</strong>?
+                        {s('componentManager.deleteConfirm')} <strong>{deleteCandidate}</strong>?
                     </p>
                     
                     {deleteReport && deleteReport.entityCount > 0 && (
                         <div className="bg-red-900/10 border border-red-500/30 p-4 rounded-lg text-sm">
-                            <div className="text-red-400 font-bold mb-2 uppercase tracking-wide text-xs">Usage Warning</div>
+                            <div className="text-red-400 font-bold mb-2 uppercase tracking-wide text-xs">{s('componentManager.usageWarning')}</div>
                             <p className="text-slate-300 text-xs mb-1">
-                                Used by <strong>{deleteReport.entityCount} entities</strong> across {deleteReport.pools.length} pools.
+                                {s('componentManager.usedByEntities', { count: deleteReport.entityCount, pools: deleteReport.pools.length })}
                             </p>
                         </div>
                     )}
 
                     <div className="flex justify-end gap-3 pt-2">
-                        <NexusButton variant="ghost" onClick={() => { setDeleteCandidate(null); setDeleteReport(null); }}>Cancel</NexusButton>
-                        <NexusButton variant="destructive" onClick={confirmDelete}>Confirm Deletion</NexusButton>
+                        <NexusButton variant="ghost" onClick={() => { setDeleteCandidate(null); setDeleteReport(null); }}>{s('common.cancel')}</NexusButton>
+                        <NexusButton variant="destructive" onClick={confirmDelete}>{s('componentManager.confirmDeletion')}</NexusButton>
                     </div>
                 </div>
             </NexusModal>

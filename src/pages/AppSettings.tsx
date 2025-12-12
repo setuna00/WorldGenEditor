@@ -297,6 +297,7 @@ const AppSettings: React.FC = () => {
                                     <div className="flex flex-col gap-2 bg-nexus-900 p-2 rounded-lg border border-slate-700">
                                         {(['Small', 'Medium', 'Large'] as const).map(scale => {
                                             const isActive = (appSettings.uiScale || 'Small') === scale;
+                                            const scaleLabel = scale === 'Small' ? s('appSettings.scale.small') : scale === 'Medium' ? s('appSettings.scale.medium') : s('appSettings.scale.large');
                                             return (
                                                 <button
                                                     key={scale}
@@ -308,7 +309,7 @@ const AppSettings: React.FC = () => {
                                                     }`}
                                                 >
                                                     <span className={scale === 'Medium' ? 'text-base' : scale === 'Large' ? 'text-lg' : 'text-sm'}>
-                                                        {scale}
+                                                        {scaleLabel}
                                                     </span>
                                                     {isActive && <Check size={14} />}
                                                 </button>
@@ -513,29 +514,32 @@ const AppSettings: React.FC = () => {
                         <div className="flex-1">
                              <div className="flex justify-between items-start mb-6">
                                 <div>
-                                    <h3 className="text-lg font-bold text-slate-200 mb-2">Output Length Definitions</h3>
+                                    <h3 className="text-lg font-bold text-slate-200 mb-2">{s('appSettings.length.title')}</h3>
                                     <p className="text-sm text-slate-400">
-                                        Define instruction sets for short, medium, and long generation.
+                                        {s('appSettings.length.subtitle')}
                                     </p>
                                 </div>
                                 
                                 {/* Default Length Selection */}
                                 <div className="text-right">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Default Setting</label>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">{s('appSettings.length.defaultSetting')}</label>
                                     <div className="inline-flex bg-nexus-900 p-1 rounded-lg border border-slate-700">
-                                        {['Short', 'Medium', 'Long'].map(len => (
-                                            <button
-                                                key={len}
-                                                onClick={() => setDefaultOutputLength(len as any)}
-                                                className={`px-3 py-1 rounded text-xs font-bold transition-all ${
-                                                    appSettings.defaultOutputLength === len 
-                                                    ? 'bg-nexus-accent text-white' 
-                                                    : 'text-slate-500 hover:text-slate-300'
-                                                }`}
-                                            >
-                                                {len}
-                                            </button>
-                                        ))}
+                                        {['Short', 'Medium', 'Long'].map(len => {
+                                            const lenLabel = len === 'Short' ? s('appSettings.length.short') : len === 'Medium' ? s('appSettings.length.medium') : s('appSettings.length.long');
+                                            return (
+                                                <button
+                                                    key={len}
+                                                    onClick={() => setDefaultOutputLength(len as any)}
+                                                    className={`px-3 py-1 rounded text-xs font-bold transition-all ${
+                                                        appSettings.defaultOutputLength === len 
+                                                        ? 'bg-nexus-accent text-white' 
+                                                        : 'text-slate-500 hover:text-slate-300'
+                                                    }`}
+                                                >
+                                                    {lenLabel}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             </div>
@@ -543,44 +547,44 @@ const AppSettings: React.FC = () => {
                             <div className="space-y-4">
                                 <div>
                                     <label className="flex justify-between text-xs text-slate-500 uppercase font-bold mb-1.5">
-                                        <span>Short (Concise)</span>
-                                        <span className="text-slate-600">e.g. "Max 30 words"</span>
+                                        <span>{s('appSettings.length.shortConcise')}</span>
+                                        <span className="text-slate-600">{s('appSettings.length.shortExample')}</span>
                                     </label>
                                     <NexusTextArea 
                                         value={lengths.short}
                                         onChange={e => setLengths(prev => ({ ...prev, short: e.target.value }))}
                                         className="h-16"
-                                        placeholder="Instruction for Short output..."
+                                        placeholder={s('appSettings.length.placeholder.short')}
                                     />
                                 </div>
                                 <div>
                                     <label className="flex justify-between text-xs text-slate-500 uppercase font-bold mb-1.5">
-                                        <span>Medium (Standard)</span>
-                                        <span className="text-slate-600">e.g. "Approx 100 words"</span>
+                                        <span>{s('appSettings.length.mediumStandard')}</span>
+                                        <span className="text-slate-600">{s('appSettings.length.mediumExample')}</span>
                                     </label>
                                     <NexusTextArea 
                                         value={lengths.medium}
                                         onChange={e => setLengths(prev => ({ ...prev, medium: e.target.value }))}
                                         className="h-16"
-                                        placeholder="Instruction for Medium output..."
+                                        placeholder={s('appSettings.length.placeholder.medium')}
                                     />
                                 </div>
                                 <div>
                                     <label className="flex justify-between text-xs text-slate-500 uppercase font-bold mb-1.5">
-                                        <span>Long (Detailed)</span>
-                                        <span className="text-slate-600">e.g. "Min 500 words"</span>
+                                        <span>{s('appSettings.length.longDetailed')}</span>
+                                        <span className="text-slate-600">{s('appSettings.length.longExample')}</span>
                                     </label>
                                     <NexusTextArea 
                                         value={lengths.long}
                                         onChange={e => setLengths(prev => ({ ...prev, long: e.target.value }))}
                                         className="h-20"
-                                        placeholder="Instruction for Long output..."
+                                        placeholder={s('appSettings.length.placeholder.long')}
                                     />
                                 </div>
                                 
                                 <div className="flex justify-end pt-2">
                                     <NexusButton onClick={handleSaveLengths} icon={<Save size={16} />}>
-                                        Save Definitions
+                                        {s('appSettings.button.saveDefinitions')}
                                     </NexusButton>
                                 </div>
                             </div>
@@ -597,9 +601,9 @@ const AppSettings: React.FC = () => {
                         <div className="flex-1">
                              <div className="flex justify-between items-center mb-4">
                                 <div>
-                                    <h3 className="text-lg font-bold text-slate-200 mb-1">Narrative Roles</h3>
+                                    <h3 className="text-lg font-bold text-slate-200 mb-1">{s('appSettings.roles.title')}</h3>
                                     <p className="text-sm text-slate-400">
-                                        Define the personality and writing style of the AI.
+                                        {s('appSettings.roles.subtitle')}
                                     </p>
                                 </div>
                                 <NexusButton 
@@ -607,7 +611,7 @@ const AppSettings: React.FC = () => {
                                     onClick={() => openToneModal()}
                                     icon={<Plus size={14} />}
                                 >
-                                    New Role
+                                    {s('appSettings.roles.newRole')}
                                 </NexusButton>
                              </div>
                             
@@ -617,7 +621,7 @@ const AppSettings: React.FC = () => {
                                         <div>
                                             <div className="font-bold text-slate-200 text-sm flex items-center gap-2">
                                                 {tone.name}
-                                                {tone.i18n && <span className="text-xs bg-slate-800 text-slate-500 px-1 rounded uppercase tracking-wider">Multilingual</span>}
+                                                {tone.i18n && <span className="text-xs bg-slate-800 text-slate-500 px-1 rounded uppercase tracking-wider">{s('appSettings.badge.multilingual')}</span>}
                                             </div>
                                             <div className="text-xs text-slate-500 mb-1">{tone.description}</div>
                                             <div className="text-xs text-slate-600 font-mono italic truncate max-w-md border-l-2 border-slate-700 pl-2 opacity-70">
@@ -625,10 +629,10 @@ const AppSettings: React.FC = () => {
                                             </div>
                                         </div>
                                         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={() => openToneModal(tone)} className="p-2 bg-nexus-800 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-all" title="Edit Role">
+                                            <button onClick={() => openToneModal(tone)} className="p-2 bg-nexus-800 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-all" title={s('appSettings.tooltip.editRole')}>
                                                 <Edit2 size={14} />
                                             </button>
-                                            <button onClick={() => setDeleteToneId(tone.id)} className="p-2 bg-nexus-800 rounded border border-slate-700 text-slate-400 hover:text-red-400 hover:border-red-500/50 transition-all" title="Delete Role">
+                                            <button onClick={() => setDeleteToneId(tone.id)} className="p-2 bg-nexus-800 rounded border border-slate-700 text-slate-400 hover:text-red-400 hover:border-red-500/50 transition-all" title={s('appSettings.tooltip.deleteRole')}>
                                                 <Trash2 size={14} />
                                             </button>
                                         </div>
@@ -646,15 +650,15 @@ const AppSettings: React.FC = () => {
                             <FlaskConical size={24} />
                         </div>
                         <div className="flex-1">
-                            <h3 className="text-lg font-bold text-slate-200 mb-1">Experimental Features</h3>
+                            <h3 className="text-lg font-bold text-slate-200 mb-1">{s('appSettings.experimental.title')}</h3>
                             <p className="text-sm text-slate-400 mb-4">
-                                Enable or disable features that are currently in testing.
+                                {s('appSettings.experimental.subtitle')}
                             </p>
                             
                             <div className="flex items-center justify-between bg-nexus-900 p-4 rounded-lg border border-slate-700">
                                 <div>
-                                    <h4 className="font-bold text-slate-200 text-sm">Image Generation</h4>
-                                    <p className="text-xs text-slate-500">Allows generating visual previews for items using AI.</p>
+                                    <h4 className="font-bold text-slate-200 text-sm">{s('appSettings.imageGen.title')}</h4>
+                                    <p className="text-xs text-slate-500">{s('appSettings.imageGen.subtitle')}</p>
                                 </div>
                                 <button 
                                     onClick={toggleImageGen}
@@ -665,7 +669,7 @@ const AppSettings: React.FC = () => {
                                     }`}
                                 >
                                     {appSettings.enableImageGen ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
-                                    {appSettings.enableImageGen ? 'Enabled' : 'Disabled'}
+                                    {appSettings.enableImageGen ? s('appSettings.state.enabled') : s('appSettings.state.disabled')}
                                 </button>
                             </div>
                         </div>
@@ -679,9 +683,9 @@ const AppSettings: React.FC = () => {
                             <Terminal size={24} />
                         </div>
                         <div className="flex-1">
-                             <h3 className="text-lg font-bold text-slate-200 mb-1">System History</h3>
+                             <h3 className="text-lg font-bold text-slate-200 mb-1">{s('appSettings.logs.title')}</h3>
                              <p className="text-sm text-slate-400 mb-4">
-                                Full generation history. Logs are cleared when refreshing the application.
+                                {s('appSettings.logs.subtitle')}
                             </p>
                             
                             <LogViewer logs={globalLogs} toggleLog={toggleGlobalLog} />
@@ -694,41 +698,41 @@ const AppSettings: React.FC = () => {
             <NexusModal
                 isOpen={isToneModalOpen}
                 onClose={() => setIsToneModalOpen(false)}
-                title={<><Sparkles size={18} className="text-purple-400"/> {editingTone.id ? 'Edit Narrative Role' : 'Create New Role'}</>}
+                title={<><Sparkles size={18} className="text-purple-400"/> {editingTone.id ? s('appSettings.modal.editRoleTitle') : s('appSettings.modal.createRoleTitle')}</>}
                 footer={
                     <div className="flex justify-end gap-2">
-                        <NexusButton variant="ghost" onClick={() => setIsToneModalOpen(false)}>Cancel</NexusButton>
-                        <NexusButton onClick={handleSaveTone}>Save Role</NexusButton>
+                        <NexusButton variant="ghost" onClick={() => setIsToneModalOpen(false)}>{s('appSettings.modal.cancel')}</NexusButton>
+                        <NexusButton onClick={handleSaveTone}>{s('appSettings.modal.saveRole')}</NexusButton>
                     </div>
                 }
             >
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                         <NexusInput 
-                            label="Role Name"
+                            label={s('appSettings.field.roleName')}
                             value={editingTone.name || ''}
                             onChange={e => setEditingTone({...editingTone,name: e.target.value})}
-                            placeholder="e.g. The Crypt Keeper"
+                            placeholder={s('appSettings.modal.roleNamePlaceholder')}
                         />
                         <NexusInput 
-                            label="Short Description"
+                            label={s('appSettings.field.shortDescription')}
                             value={editingTone.description || ''}
                             onChange={e => setEditingTone({...editingTone, description: e.target.value})}
-                            placeholder="e.g. Spooky & Ancient"
+                            placeholder={s('appSettings.modal.roleDescPlaceholder')}
                         />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-500 uppercase font-bold mb-1.5 tracking-wide">
-                            System Prompt Instruction
+                            {s('appSettings.field.systemPrompt')}
                         </label>
                         <NexusTextArea 
                             value={editingTone.instruction || ''}
                             onChange={e => setEditingTone({...editingTone, instruction: e.target.value})}
                             className="h-32 font-mono text-xs leading-relaxed"
-                            placeholder="Define who the AI is. E.g., 'You are an ancient scholar writing in a dusty tome...'"
+                            placeholder={s('appSettings.modal.systemPromptPlaceholder')}
                         />
                         <p className="text-xs text-slate-500 mt-2 bg-nexus-900 p-2 rounded border border-slate-800">
-                            <strong className="text-nexus-accent">Tip:</strong> Custom edits apply universally. To support multilingual switching for this role, please use the <strong>Import Config</strong> feature with an <code>i18n</code> block.
+                            <strong className="text-nexus-accent">{s('appSettings.modal.tip')}</strong> {s('appSettings.modal.tipContent')}
                         </p>
                     </div>
                 </div>
@@ -738,18 +742,18 @@ const AppSettings: React.FC = () => {
             <NexusModal
                 isOpen={!!deleteToneId}
                 onClose={() => setDeleteToneId(null)}
-                title={<span className="text-red-400 flex items-center gap-2"><AlertTriangle size={20} /> Confirm Deletion</span>}
+                title={<span className="text-red-400 flex items-center gap-2"><AlertTriangle size={20} /> {s('appSettings.modal.confirmDeletion')}</span>}
                 footer={
                     <div className="flex justify-end gap-2">
-                        <NexusButton variant="ghost" onClick={() => setDeleteToneId(null)}>Cancel</NexusButton>
-                        <NexusButton variant="destructive" onClick={confirmDeleteTone}>Delete Role</NexusButton>
+                        <NexusButton variant="ghost" onClick={() => setDeleteToneId(null)}>{s('appSettings.modal.cancel')}</NexusButton>
+                        <NexusButton variant="destructive" onClick={confirmDeleteTone}>{s('appSettings.modal.deleteRole')}</NexusButton>
                     </div>
                 }
             >
                 <div className="space-y-4">
-                    <p className="text-slate-300">Are you sure you want to delete this narrative role?</p>
+                    <p className="text-slate-300">{s('appSettings.modal.deleteRole.question')}</p>
                     <div className="bg-red-900/10 border border-red-500/20 p-3 rounded text-xs text-red-300">
-                        This action cannot be undone. Any generations using this role will revert to the default.
+                        {s('appSettings.modal.deleteRole.warning')}
                     </div>
                 </div>
             </NexusModal>

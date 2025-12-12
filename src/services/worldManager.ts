@@ -58,12 +58,21 @@ export class WorldManager {
     return await db.listWorlds();
   }
 
-  async createWorld(name: string, genre: string): Promise<World> {
+  async createWorld(name: string, genre: string, language: 'English' | 'Chinese' = 'English'): Promise<World> {
     const id = crypto.randomUUID();
     
     // 1. Initialize Registry with ONLY System Core
     const initialRegistry: Record<string, ComponentDefinition> = {};
     STANDARD_COMPONENTS.forEach(def => { initialRegistry[def.id] = def; });
+
+    // Translate rarity labels based on language
+    const rarityLabels = language === 'Chinese' 
+        ? { common: '普通', uncommon: '罕见', rare: '稀有', epic: '史诗', legendary: '传说' }
+        : { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary' };
+    
+    const defaultLoreContext = language === 'Chinese' 
+        ? `${name}的默认设定。`
+        : `A default setting for ${name}.`;
 
     const newWorld: World = {
       id,
@@ -71,16 +80,16 @@ export class WorldManager {
       name,
       config: {
         genre,
-        loreContext: `A default setting for ${name}.`,
+        loreContext: defaultLoreContext,
         contextFields: [],
         raritySettings: {
-            defaultLevel: 'Common',
+            defaultLevel: rarityLabels.common,
             levels: [
-                { id: 'common', label: 'Common', weight: 50, color: '#94a3b8' },
-                { id: 'uncommon', label: 'Uncommon', weight: 30, color: '#10b981' },
-                { id: 'rare', label: 'Rare', weight: 15, color: '#3b82f6' },
-                { id: 'epic', label: 'Epic', weight: 4, color: '#a855f7' },
-                { id: 'legendary', label: 'Legendary', weight: 1, color: '#f59e0b' }
+                { id: 'common', label: rarityLabels.common, weight: 50, color: '#94a3b8' },
+                { id: 'uncommon', label: rarityLabels.uncommon, weight: 30, color: '#10b981' },
+                { id: 'rare', label: rarityLabels.rare, weight: 15, color: '#3b82f6' },
+                { id: 'epic', label: rarityLabels.epic, weight: 4, color: '#a855f7' },
+                { id: 'legendary', label: rarityLabels.legendary, weight: 1, color: '#f59e0b' }
             ]
         },
         useGlobalPromptPrefix: false // NEW: Default to false

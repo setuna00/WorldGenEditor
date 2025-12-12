@@ -6,6 +6,7 @@ import { NexusSourceLayout, SourceOption } from './NexusSourceLayout';
 import { TagChip } from './TagChip';
 import { db } from '../services/db';
 import { UniversalEntity } from '../types';
+import { useStrings } from '../lib/translations';
 
 interface NexusEntityPickerProps {
     value: string[]; 
@@ -24,6 +25,7 @@ export const NexusEntityPicker: React.FC<NexusEntityPickerProps> = ({
     value = [], onChange, label, placeholder = "Select...", single = false, limitToPool, className, initialMode = 'tags', lockedMode, trigger
 }) => {
     const { currentWorld, worldManager } = useWorld();
+    const { s } = useStrings();
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const [selectedSource, setSelectedSource] = useState<string>('All');
@@ -92,8 +94,8 @@ export const NexusEntityPicker: React.FC<NexusEntityPickerProps> = ({
     const sourceOptions: SourceOption[] = useMemo(() => {
         const pools = Object.values(currentWorld.pools);
         return [
-            { id: 'All', label: 'All Sources', icon: Globe },
-            { id: 'GlobalTags', label: 'Common Tags', icon: Tag },
+            { id: 'All', label: s('entityPicker.allSources'), icon: Globe },
+            { id: 'GlobalTags', label: s('entityPicker.commonTags'), icon: Tag },
             ...pools.map(p => ({
                 id: p.name,
                 label: p.name,
@@ -101,7 +103,7 @@ export const NexusEntityPicker: React.FC<NexusEntityPickerProps> = ({
                 color: p.color
             }))
         ];
-    }, [currentWorld]);
+    }, [currentWorld, s]);
 
     const availableOptions = useMemo(() => {
         const options: { id: string, label: string, type: 'tag' | 'item', source: string, color?: string }[] = [];
@@ -185,13 +187,13 @@ export const NexusEntityPicker: React.FC<NexusEntityPickerProps> = ({
                 </div>
             )}
 
-            <NexusModal isOpen={isOpen} onClose={() => setIsOpen(false)} title={<><Database size={18} className="text-nexus-accent" /> Select {lockedMode === 'tags' ? 'Tag' : lockedMode === 'entities' ? 'Entity' : 'Entity / Tag'}</>} maxWidth="max-w-4xl" footer={<div className="flex justify-between w-full items-center"><div className="text-xs text-slate-500">{value.length} selected</div><NexusButton onClick={() => setIsOpen(false)}>Done</NexusButton></div>}>
-                <NexusSourceLayout sources={sourceOptions} selectedSource={selectedSource} onSourceSelect={setSelectedSource} searchQuery={search} onSearchChange={setSearch} searchPlaceholder={`Search in ${selectedSource}...`} className="h-[500px]">
+            <NexusModal isOpen={isOpen} onClose={() => setIsOpen(false)} title={<><Database size={18} className="text-nexus-accent" /> {lockedMode === 'tags' ? s('entityPicker.titleTag') : lockedMode === 'entities' ? s('entityPicker.titleEntity') : s('entityPicker.title')}</>} maxWidth="max-w-4xl" footer={<div className="flex justify-between w-full items-center"><div className="text-xs text-slate-500">{s('entityPicker.selected', { count: value.length })}</div><NexusButton onClick={() => setIsOpen(false)}>{s('entityPicker.done')}</NexusButton></div>}>
+                <NexusSourceLayout sources={sourceOptions} selectedSource={selectedSource} onSourceSelect={setSelectedSource} searchQuery={search} onSearchChange={setSearch} searchPlaceholder={s('entityPicker.searchIn', { source: selectedSource })} className="h-[500px]">
                     {!lockedMode && (
                         <div className="w-full flex justify-center mb-4 sticky top-0 z-10 bg-nexus-900/95 backdrop-blur-sm pb-2 -mt-2 pt-2 border-b border-slate-800">
                             <div className="flex bg-nexus-950 p-1 rounded-lg border border-slate-700 w-64">
-                                <button className={`flex-1 py-1.5 text-xs font-bold rounded transition-all ${viewMode === 'tags' ? 'bg-nexus-accent text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => setViewMode('tags')}>Tags</button>
-                                <button className={`flex-1 py-1.5 text-xs font-bold rounded transition-all ${viewMode === 'entities' ? 'bg-nexus-accent text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => setViewMode('entities')}>Entities</button>
+                                <button className={`flex-1 py-1.5 text-xs font-bold rounded transition-all ${viewMode === 'tags' ? 'bg-nexus-accent text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => setViewMode('tags')}>{s('entityPicker.tags')}</button>
+                                <button className={`flex-1 py-1.5 text-xs font-bold rounded transition-all ${viewMode === 'entities' ? 'bg-nexus-accent text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => setViewMode('entities')}>{s('entityPicker.entities')}</button>
                             </div>
                         </div>
                     )}
@@ -204,12 +206,12 @@ export const NexusEntityPicker: React.FC<NexusEntityPickerProps> = ({
 
                     {!isLoading && (
                         <div className="flex flex-wrap gap-2 content-start">
-                             {search.trim() && !availableOptions.some(o => o.label.toLowerCase() === search.toLowerCase()) && <button onClick={handleCreate} className="flex items-center gap-2 px-3 py-2 rounded border border-dashed border-nexus-accent/50 bg-nexus-accent/10 text-nexus-accent hover:bg-nexus-accent/20 text-xs font-bold text-left min-h-[40px]"><Plus size={14} /> Create "{search}"</button>}
+                             {search.trim() && !availableOptions.some(o => o.label.toLowerCase() === search.toLowerCase()) && <button onClick={handleCreate} className="flex items-center gap-2 px-3 py-2 rounded border border-dashed border-nexus-accent/50 bg-nexus-accent/10 text-nexus-accent hover:bg-nexus-accent/20 text-xs font-bold text-left min-h-[40px]"><Plus size={14} /> {s('entityPicker.create', { text: search })}</button>}
                             {availableOptions.map((opt, idx) => {
                                 const isSelected = value.includes(opt.id) || value.includes(opt.label);
                                 return <TagChip key={`${opt.id}-${idx}`} tagName={opt.label} color={opt.color || '#64748b'} selected={isSelected} onClick={() => handleSelect(opt.id)} isGlobal={opt.source === 'Global'} icon={opt.type === 'item' ? Box : undefined} className="flex-grow-0" />;
                             })}
-                            {availableOptions.length === 0 && !search && <div className="w-full text-center py-10 text-slate-500 text-xs italic">Start typing to search...</div>}
+                            {availableOptions.length === 0 && !search && <div className="w-full text-center py-10 text-slate-500 text-xs italic">{s('entityPicker.startTyping')}</div>}
                         </div>
                     )}
                 </NexusSourceLayout>

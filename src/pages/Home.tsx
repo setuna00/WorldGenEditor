@@ -145,7 +145,7 @@ const Home: React.FC = () => {
     }
     
     try {
-        const newWorld = await worldManager.createWorld(newName, newGenre);
+        const newWorld = await worldManager.createWorld(newName, newGenre, settings.defaultLanguage || 'English');
         setActiveWorldId(newWorld.id);
         setIsCreatingWorld(false);
         toast({ title: s('home.toast.worldInitialized.title'), message: s('home.toast.worldInitialized.message', { name: newWorld.name }), type: "success" });
@@ -312,9 +312,36 @@ const Home: React.FC = () => {
 
   const renderInterfaceSettings = () => (
       <div className="space-y-6 animate-in fade-in slide-in-from-right-2">
+          {/* Language */}
+          <div className="bg-nexus-900 p-4 rounded-lg border border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                  <Languages size={20} className="text-orange-400" />
+                  <div>
+                      <h3 className="font-bold text-slate-200 text-sm">{s('home.config.defaultLanguage')}</h3>
+                      <p className="text-xs text-slate-500">{s('home.config.outputLanguageHint')}</p>
+                  </div>
+              </div>
+              <div className="flex bg-nexus-950 rounded p-1 border border-slate-800">
+                  {(['English', 'Chinese'] as const).map(lang => (
+                      <button
+                          key={lang}
+                          onClick={() => handleUpdateLanguage(lang)}
+                          className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
+                              settings.defaultLanguage === lang
+                              ? 'bg-nexus-accent text-white shadow'
+                              : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                      >
+                          {lang === 'Chinese' ? '中文' : 'EN'}
+                      </button>
+                  ))}
+              </div>
+          </div>
+
+          {/* UI Scaling */}
           <div className="bg-nexus-900 p-4 rounded-lg border border-slate-700">
               <h3 className="font-bold text-slate-200 mb-4 flex items-center gap-2">
-                  <Monitor size={18} className="text-nexus-accent" /> UI Scaling
+                  <Monitor size={18} className="text-nexus-accent" /> {s('home.config.uiScaling')}
               </h3>
               <div className="grid grid-cols-3 gap-4">
                   {(['Small', 'Medium', 'Large'] as const).map(scale => (
@@ -335,18 +362,18 @@ const Home: React.FC = () => {
                   ))}
               </div>
               <p className="text-xs text-slate-500 mt-4 text-center">
-                  Adjusts the global font size and density of the Nexus interface.
+                  {s('home.config.uiScalingHint')}
               </p>
           </div>
       </div>
   );
 
   const renderNarrativeSettings = () => (
-      <div className="space-y-6 animate-in fade-in slide-in-from-right-2 h-[400px] flex flex-col">
+      <div className="space-y-6 animate-in fade-in slide-in-from-right-2 flex flex-col">
           
           {/* IMPORT / EXPORT CONTROLS */}
           <div className="flex justify-between items-center bg-nexus-900 p-3 rounded-lg border border-slate-700">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Style Config</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{s('home.config.styleConfig')}</span>
               <div className="flex gap-2">
                    <input 
                        type="file" 
@@ -356,10 +383,10 @@ const Home: React.FC = () => {
                        className="hidden" 
                    />
                    <NexusButton size="sm" variant="ghost" onClick={() => configFileInputRef.current?.click()} icon={<Upload size={14} />}>
-                       Import Style
+                       {s('home.config.importStyle')}
                    </NexusButton>
                    <NexusButton size="sm" variant="ghost" onClick={handleExportConfig} icon={<Download size={14} />}>
-                       Export Style
+                       {s('home.config.exportStyle')}
                    </NexusButton>
               </div>
           </div>
@@ -367,52 +394,56 @@ const Home: React.FC = () => {
           {/* AI PREFIX */}
           <div className="shrink-0">
                <h3 className="font-bold text-slate-200 mb-2 flex items-center gap-2">
-                  <MessageSquare size={16} className="text-blue-400" /> Global AI Prefix
+                  <MessageSquare size={16} className="text-blue-400" /> {s('home.config.globalAIPrefix')}
               </h3>
               <NexusTextArea 
                   value={settings.globalPromptPrefix || ''}
                   onChange={e => updateSettings({ ...settings, globalPromptPrefix: e.target.value })}
-                  placeholder="System instructions injected into every AI call (e.g. 'Be succinct', 'No modern tech')..."
-                  className="h-64 text-xs font-mono" // Resized to h-64
+                  onKeyDown={e => e.stopPropagation()}
+                  placeholder={s('home.config.globalAIPrefixPlaceholder')}
+                  className="h-40 text-xs font-mono"
               />
           </div>
 
           {/* ROLES EDITOR */}
-          <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex flex-col">
                <div className="flex justify-between items-center mb-2 mt-4">
                    <h3 className="font-bold text-slate-200 flex items-center gap-2">
-                      <Sparkles size={16} className="text-purple-400" /> Narrative Roles
+                      <Sparkles size={16} className="text-purple-400" /> {s('home.config.narrativeRoles')}
                    </h3>
                    <button 
                       onClick={() => setEditingTone({ name: '', description: '', instruction: '' })}
                       className="text-xs flex items-center gap-1 text-nexus-accent hover:text-white"
                    >
-                       <Plus size={12} /> Add Role
+                       <Plus size={12} /> {s('home.config.addRole')}
                    </button>
                </div>
 
                {editingTone ? (
                    <div className="bg-nexus-900 p-3 rounded border border-slate-700 space-y-3 animate-in zoom-in-95">
                        <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                           <span className="text-xs font-bold text-purple-400 uppercase">Editing Role</span>
+                           <span className="text-xs font-bold text-purple-400 uppercase">{s('home.config.editingRole')}</span>
                            <button onClick={() => setEditingTone(null)} className="text-slate-500 hover:text-white"><Settings size={12} /></button>
                        </div>
                        <div className="grid grid-cols-2 gap-2">
                            <NexusInput 
                                value={editingTone.name} 
-                               onChange={e => setEditingTone({...editingTone, name: e.target.value})} 
-                               placeholder="Role Name"
+                               onChange={e => setEditingTone({...editingTone, name: e.target.value})}
+                               onKeyDown={e => e.stopPropagation()}
+                               placeholder={s('home.config.roleName')}
                            />
                            <NexusInput 
                                value={editingTone.description} 
-                               onChange={e => setEditingTone({...editingTone, description: e.target.value})} 
-                               placeholder="Short Desc"
+                               onChange={e => setEditingTone({...editingTone, description: e.target.value})}
+                               onKeyDown={e => e.stopPropagation()}
+                               placeholder={s('home.config.shortDesc')}
                            />
                        </div>
                        <NexusTextArea 
                            value={editingTone.instruction} 
-                           onChange={e => setEditingTone({...editingTone, instruction: e.target.value})} 
-                           placeholder="System Instruction (e.g. 'You are a gritty narrator...')"
+                           onChange={e => setEditingTone({...editingTone, instruction: e.target.value})}
+                           onKeyDown={e => e.stopPropagation()}
+                           placeholder={s('home.config.systemInstruction')}
                            className="h-20 text-xs"
                        />
                        <div className="flex justify-end gap-2">
@@ -421,7 +452,7 @@ const Home: React.FC = () => {
                        </div>
                    </div>
                ) : (
-                   <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 border border-slate-700 rounded bg-nexus-900 p-2">
+                   <div className="max-h-[280px] overflow-y-auto custom-scrollbar space-y-2 border border-slate-700 rounded bg-nexus-900 p-2">
                        {settings.tones.map(tone => (
                            <div key={tone.id} className="bg-nexus-800 p-2 rounded border border-slate-700 flex justify-between items-center group">
                                <div className="min-w-0 pr-2">
@@ -448,8 +479,8 @@ const Home: React.FC = () => {
                   <div className="flex items-center gap-3">
                       <Bot size={20} className="text-yellow-400" />
                       <div>
-                          <h3 className="font-bold text-slate-200 text-sm">AI Provider Configuration</h3>
-                          <p className="text-xs text-slate-500">Choose your AI provider and model for content generation.</p>
+                          <h3 className="font-bold text-slate-200 text-sm">{s('home.config.aiProviderConfig')}</h3>
+                          <p className="text-xs text-slate-500">{s('home.config.aiProviderDesc')}</p>
                       </div>
                   </div>
                   <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold ${
@@ -458,7 +489,7 @@ const Home: React.FC = () => {
                       : 'bg-red-500/10 border border-red-500/30 text-red-400'
                   }`}>
                       {aiIsConfigured ? <CheckCircle size={14} /> : <XCircle size={14} />}
-                      {aiIsConfigured ? 'Connected' : 'Not Configured'}
+                      {aiIsConfigured ? s('home.config.connected') : s('home.config.notConfigured')}
                   </div>
               </div>
 
@@ -493,7 +524,7 @@ const Home: React.FC = () => {
                   {/* Model Selection */}
                   <div className="bg-nexus-950 p-3 rounded-lg border border-slate-700">
                       <label className="block text-xs text-slate-500 uppercase font-bold mb-2 tracking-wide flex items-center gap-2">
-                          <Zap size={10} /> Select Model
+                          <Zap size={10} /> {s('home.config.selectModel')}
                       </label>
                       <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto custom-scrollbar">
                           {availableModels.map(model => {
@@ -549,11 +580,11 @@ const Home: React.FC = () => {
                   {/* Use Custom Key Toggle */}
                   <div className="flex items-center justify-between bg-nexus-950 p-3 rounded-lg border border-slate-700">
                       <div>
-                          <h4 className="font-bold text-slate-200 text-xs">Use Custom API Key</h4>
+                          <h4 className="font-bold text-slate-200 text-xs">{s('home.config.useCustomKey')}</h4>
                           <p className="text-xs text-slate-500">
                               {aiSettings.useCustomKey 
-                                  ? 'Using your personal API key (stored locally)' 
-                                  : `Using environment variable (${currentProviderInfo.envKey})`}
+                                  ? s('home.config.usingPersonalKey')
+                                  : s('home.config.usingEnvVar', { key: currentProviderInfo.envKey })}
                           </p>
                       </div>
                       <button 
@@ -575,7 +606,7 @@ const Home: React.FC = () => {
                           }`}
                       >
                           {aiSettings.useCustomKey ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                          {aiSettings.useCustomKey ? 'Custom' : 'Env'}
+                          {aiSettings.useCustomKey ? s('home.config.customKey') : s('home.config.envKey')}
                       </button>
                   </div>
 
@@ -591,6 +622,7 @@ const Home: React.FC = () => {
                                       type={showApiKey ? 'text' : 'password'}
                                       value={tempApiKey}
                                       onChange={e => setTempApiKey(e.target.value)}
+                                      onKeyDown={e => e.stopPropagation()}
                                       placeholder={tempProvider === 'openai' ? 'sk-...' : 'AIza...'}
                                       className="text-xs font-mono pr-10"
                                   />
@@ -609,7 +641,7 @@ const Home: React.FC = () => {
                               {tempProvider === 'openai' && (
                                   <>Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-nexus-accent hover:underline">OpenAI Dashboard</a>.</>
                               )}
-                              {' '}Your key is stored locally and never sent to any server.
+                              {' '}{s('home.config.keyStoredLocally')}
                           </p>
                       </div>
                   )}
@@ -617,35 +649,9 @@ const Home: React.FC = () => {
                   {/* Save Button */}
                   <div className="flex justify-end pt-1">
                       <NexusButton size="sm" onClick={handleSaveAIConfig} icon={<Save size={12} />}>
-                          Save AI Configuration
+                          {s('home.config.saveAIConfig')}
                       </NexusButton>
                   </div>
-              </div>
-          </div>
-
-          {/* Language */}
-          <div className="bg-nexus-900 p-4 rounded-lg border border-slate-700 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                  <Languages size={20} className="text-orange-400" />
-                  <div>
-                      <h3 className="font-bold text-slate-200 text-sm">Default Language</h3>
-                      <p className="text-xs text-slate-500">Output language for AI generation.</p>
-                  </div>
-              </div>
-              <div className="flex bg-nexus-950 rounded p-1 border border-slate-800">
-                  {(['English', 'Chinese'] as const).map(lang => (
-                      <button
-                          key={lang}
-                          onClick={() => handleUpdateLanguage(lang)}
-                          className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
-                              settings.defaultLanguage === lang
-                              ? 'bg-nexus-accent text-white shadow'
-                              : 'text-slate-500 hover:text-slate-300'
-                          }`}
-                      >
-                          {lang === 'Chinese' ? '中文' : 'EN'}
-                      </button>
-                  ))}
               </div>
           </div>
 
@@ -655,10 +661,10 @@ const Home: React.FC = () => {
                   <FlaskConical size={20} className="text-slate-500" />
                   <div>
                       <h3 className="font-bold text-slate-400 text-sm flex items-center gap-2">
-                        Image Generation 
-                        <span className="bg-slate-800 text-slate-500 text-xs px-1.5 py-0.5 rounded uppercase tracking-wider">Coming Soon</span>
+                        {s('home.config.imageGeneration')}
+                        <span className="bg-slate-800 text-slate-500 text-xs px-1.5 py-0.5 rounded uppercase tracking-wider">{s('home.config.comingSoon')}</span>
                       </h3>
-                      <p className="text-xs text-slate-600">Visual asset generation is currently disabled.</p>
+                      <p className="text-xs text-slate-600">{s('home.config.imageGenDesc')}</p>
                   </div>
               </div>
               <button 
@@ -666,7 +672,7 @@ const Home: React.FC = () => {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800/50 text-slate-600 text-xs font-bold cursor-not-allowed"
               >
                   <Lock size={14} />
-                  Unavailable
+                  {s('home.config.unavailable')}
               </button>
           </div>
       </div>

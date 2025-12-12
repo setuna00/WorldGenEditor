@@ -21,7 +21,7 @@ interface GenerationEngineProps {
 
 const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asset' }) => {
     const { currentWorld, worldManager, refreshWorld, appSettings, forgeState, setForgeState } = useWorld();
-    const { provider: aiProvider, isConfigured: aiIsConfigured } = useAIService();
+    const { provider: aiProvider, isConfigured: aiIsConfigured, settings: aiSettings } = useAIService();
     const logContext = useContext(LogContext);
     const { toast } = useToast(); 
     const t = useTranslation();
@@ -359,8 +359,8 @@ const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asse
                     <p className="text-slate-400 mt-2">{meta.desc}</p>
                 </div>
                 <div className="text-right hidden md:block">
-                     <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">{t.forge.header.poweredBy}</div>
-                     <div className="text-xs font-mono text-nexus-accent bg-nexus-900 px-2 py-1 rounded border border-nexus-accent/20">Gemini 2.5 Flash</div>
+                     <div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">{s('forge.usingModel')}</div>
+                     <div className="text-xs font-mono text-nexus-accent bg-nexus-900 px-2 py-1 rounded border border-nexus-accent/20">{aiSettings?.model || s('appSettings.status.notConfigured')}</div>
                 </div>
             </header>
 
@@ -466,9 +466,9 @@ const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asse
                                     value={outputLength}
                                     onChange={e => setOutputLength(e.target.value as any)}
                                 >
-                                    <option value="Short">Short</option>
-                                    <option value="Medium">Medium</option>
-                                    <option value="Long">Long</option>
+                                    <option value="Short">{s('forge.length.short')}</option>
+                                    <option value="Medium">{s('forge.length.medium')}</option>
+                                    <option value="Long">{s('forge.length.long')}</option>
                                 </NexusSelect>
                             </div>
                         </div>
@@ -524,10 +524,10 @@ const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asse
                         {showAdvanced && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-nexus-900/50 p-4 rounded-lg border border-slate-700/50 mb-6 animate-in slide-in-from-top-2">
                                 <div className="md:col-span-2">
-                                     <TagInput label={t.forge.controls.advanced.mustContain} tags={requiredAttributes} setTags={setRequiredAttributes} placeholder="e.g. fire, ancient" />
+                                     <TagInput label={t.forge.controls.advanced.mustContain} tags={requiredAttributes} setTags={setRequiredAttributes} placeholder={s('forge.placeholder.mustContain')} />
                                 </div>
                                 <div className="md:col-span-2">
-                                     <TagInput label={t.forge.controls.advanced.mustAvoid} tags={negativeConstraints} setTags={setNegativeConstraints} placeholder="e.g. futuristic" />
+                                     <TagInput label={t.forge.controls.advanced.mustAvoid} tags={negativeConstraints} setTags={setNegativeConstraints} placeholder={s('forge.placeholder.mustAvoid')} />
                                 </div>
                             </div>
                         )}

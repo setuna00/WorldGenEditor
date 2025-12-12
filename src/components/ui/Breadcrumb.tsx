@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight, Home } from 'lucide-react';
+import { useStrings } from '../../lib/translations';
 
 export interface BreadcrumbItem {
     label: string;
@@ -71,6 +72,7 @@ export const useBreadcrumbs = (
     worldName?: string,
     poolName?: string
 ): BreadcrumbItem[] => {
+    const { s } = useStrings();
     const items: BreadcrumbItem[] = [];
     
     // Parse path segments
@@ -79,7 +81,7 @@ export const useBreadcrumbs = (
     // Home is always first if not on home
     if (segments.length > 0) {
         items.push({
-            label: 'Hub',
+            label: s('breadcrumb.hub'),
             href: '/',
             icon: <Home size={14} />
         });
@@ -89,7 +91,7 @@ export const useBreadcrumbs = (
     if (segments[0] === 'world' && segments[1]) {
         const worldId = segments[1];
         items.push({
-            label: worldName || 'World',
+            label: worldName || s('breadcrumb.world'),
             href: `/world/${worldId}/edit`
         });
         
@@ -97,13 +99,13 @@ export const useBreadcrumbs = (
         if (segments[2]) {
             switch (segments[2]) {
                 case 'edit':
-                    items.push({ label: 'Overview' });
+                    items.push({ label: s('breadcrumb.overview') });
                     break;
                 case 'settings':
-                    items.push({ label: 'World Context' });
+                    items.push({ label: s('breadcrumb.worldContext') });
                     break;
                 case 'app-settings':
-                    items.push({ label: 'Settings' });
+                    items.push({ label: s('breadcrumb.settings') });
                     break;
                 case 'pool':
                     if (segments[3]) {
@@ -113,25 +115,25 @@ export const useBreadcrumbs = (
                     }
                     break;
                 case 'tags':
-                    items.push({ label: 'Tag Manager' });
+                    items.push({ label: s('breadcrumb.tagManager') });
                     break;
                 case 'components':
-                    items.push({ label: 'Components' });
+                    items.push({ label: s('breadcrumb.components') });
                     break;
                 case 'forge':
-                    items.push({ label: 'AI Forge' });
+                    items.push({ label: s('breadcrumb.aiForge') });
                     break;
                 case 'lore-forge':
-                    items.push({ label: 'Lore Forge' });
+                    items.push({ label: s('breadcrumb.loreForge') });
                     break;
                 case 'character-forge':
-                    items.push({ label: 'Character Forge' });
+                    items.push({ label: s('breadcrumb.characterForge') });
                     break;
                 case 'rules':
-                    items.push({ label: 'Rules' });
+                    items.push({ label: s('breadcrumb.rules') });
                     break;
                 case 'roller':
-                    items.push({ label: 'Roller Test' });
+                    items.push({ label: s('breadcrumb.rollerTest') });
                     break;
                 default:
                     items.push({ label: segments[2] });

@@ -491,7 +491,7 @@ export function createAIWorldBuilder(provider: AIProvider) {
             let totalTokens = 0;
 
             onProgress({ stage: 'Initialization', message: `Creating world: ${arch.worldName}...`, progress: 5 });
-            const world = await worldManager.createWorld(arch.worldName, arch.genre);
+            const world = await worldManager.createWorld(arch.worldName, arch.genre, language as 'English' | 'Chinese');
             
             if (arch.description) {
                 await worldManager.updateWorldConfig(world.id, arch.worldName, {

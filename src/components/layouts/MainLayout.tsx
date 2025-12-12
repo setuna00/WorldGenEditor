@@ -523,7 +523,8 @@ const Layout: React.FC = () => {
                             <SidebarItem to={`/world/${params.worldId}/tags`} icon={Hash} label={t.sidebar.tagManager} />
                             <SidebarItem to={`/world/${params.worldId}/forge`} icon={Hammer} label={t.sidebar.aiForge} />
                             <SidebarItem to={`/world/${params.worldId}/rules`} icon={Workflow} label={t.sidebar.rules} />
-                            <SidebarItem to={`/world/${params.worldId}/roller`} icon={Dices} label={t.sidebar.rollerTest} />
+                            {/* Roller temporarily disabled - causes page crash */}
+                            {/* <SidebarItem to={`/world/${params.worldId}/roller`} icon={Dices} label={t.sidebar.rollerTest} /> */}
                         </>
                     )}
                 </nav>

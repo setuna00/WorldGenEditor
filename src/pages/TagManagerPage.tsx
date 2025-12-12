@@ -42,10 +42,10 @@ const TagManagerPage: React.FC = () => {
     const [activePoolTags, setActivePoolTags] = useState<Set<string>>(new Set());
     const [isLoadingTags, setIsLoadingTags] = useState(false);
 
-    if (!currentWorld) return null;
-
     // --- EFFECT: Load Tags for Selected Pool ---
     useEffect(() => {
+        if (!currentWorld) return;
+        
         const loadTagsForPool = async () => {
             if (selectedSource === 'All') {
                 setActivePoolTags(new Set()); // Empty set implies "All"
@@ -78,11 +78,12 @@ const TagManagerPage: React.FC = () => {
         };
 
         loadTagsForPool();
-    }, [selectedSource, currentWorld.id]);
+    }, [selectedSource, currentWorld?.id]);
 
     // --- Data Preparation ---
 
     const sources: SourceOption[] = useMemo(() => {
+         if (!currentWorld) return [];
          const pools = Object.values(currentWorld.pools);
          return [
              { id: 'All', label: 'All Tags', icon: Globe },
@@ -96,6 +97,7 @@ const TagManagerPage: React.FC = () => {
     }, [currentWorld]);
 
     const filteredTags = useMemo(() => {
+        if (!currentWorld) return [];
         let allTags = Object.values(currentWorld.tags);
         
         // --- REAL SOURCE FILTERING ---
@@ -114,6 +116,9 @@ const TagManagerPage: React.FC = () => {
         
         return allTags.sort((a,b) => a.label.localeCompare(b.label));
     }, [currentWorld, search, selectedSource, activePoolTags]);
+
+    // Early return AFTER all hooks
+    if (!currentWorld) return null;
 
     // --- Handlers ---
 
@@ -310,7 +315,7 @@ const TagManagerPage: React.FC = () => {
                 footer={
                      <div className="flex justify-end gap-2">
                         <NexusButton variant="ghost" onClick={() => setDeletingTagId(null)}>{s('tagManager.button.cancel')}</NexusButton>
-                        <NexusButton variant="destructive" onClick={confirmDelete}>{t.common.delete}</NexusButton>
+                        <NexusButton variant="destructive" onClick={confirmDelete}>{s('common.delete')}</NexusButton>
                     </div>
                 }
             >

@@ -239,18 +239,17 @@ const WorldSettings: React.FC = () => {
       >
         <div className="space-y-6 text-sm text-slate-300">
             <p>
-                The text you provide here is injected directly into the <strong>System Prompt</strong> of the AI whenever you use the AI Forge.
-                Clearer context leads to better, more consistent generations.
+                {s('worldSettings.guide.mainDesc')}
             </p>
 
             <div className="bg-nexus-900 p-4 rounded border border-slate-700">
                 <h4 className="font-bold text-white mb-2">{s('worldSettings.guide.howItWorks')}</h4>
                 <p className="mb-2">{s('worldSettings.guide.whenRequest')}</p>
                 <ol className="list-decimal pl-5 space-y-1 text-slate-400 font-mono text-xs">
-                    <li>{settings.defaultLanguage === 'Chinese' ? '世界名称与类型' : 'World Name & Genre'}</li>
-                    <li>{settings.defaultLanguage === 'Chinese' ? '总体设定（你的主要描述）' : 'General Setting (Your main description)'}</li>
-                    <li>{settings.defaultLanguage === 'Chinese' ? '自定义字段（带标签的章节）' : 'Custom Fields (Labeled sections)'}</li>
-                    <li>{settings.defaultLanguage === 'Chinese' ? '数据池列表（有哪些类别）' : 'Pool List (What categories exist)'}</li>
+                    <li>{s('worldSettings.guide.list.worldNameGenre')}</li>
+                    <li>{s('worldSettings.guide.list.generalSetting')}</li>
+                    <li>{s('worldSettings.guide.list.customFields')}</li>
+                    <li>{s('worldSettings.guide.list.poolList')}</li>
                 </ol>
             </div>
 

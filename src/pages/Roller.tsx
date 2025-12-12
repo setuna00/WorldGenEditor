@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useWorld } from '../hooks/useWorld';
 import { UniversalEntity } from '../types';
 import { Activity, Play, RefreshCw, Plus, Trash2, Filter } from 'lucide-react';
