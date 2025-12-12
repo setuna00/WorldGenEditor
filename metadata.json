@@ -1,0 +1,5 @@
+{
+  "name": "Nexus Generator",
+  "description": "A universal procedural generation engine and World Building IDE. Features context-aware probability rolling and AI-powered content generation using Gemini.",
+  "requestFramePermissions": []
+}

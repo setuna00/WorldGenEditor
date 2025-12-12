@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Mapping Nexus Slate-900 Theme to Semantic Tokens */
+    --background: 222 47% 11%;     /* #0f172a (nexus-900) */
+    --foreground: 210 40% 98%;     /* slate-50 */
+
+    --card: 217 33% 17%;           /* #1e293b (nexus-800) */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 11%;        /* nexus-900 */
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 221 83% 53%;        /* #3b82f6 (nexus-accent) */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 215 25% 27%;      /* slate-700 (for muted buttons) */
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;          /* nexus-800 */
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217 33% 17%;         /* nexus-800 (hover state) */
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84% 60%;      /* red-500 */
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 17%;         /* slate-700 approx */
+    --input: 217 33% 17%;
+    --ring: 221 83% 53%;           /* nexus-accent */
+
+    --radius: 0.5rem;
+  }
+
+  /* --- UI SCALING LOGIC --- */
+  /* We target HTML explicitly with !important to override any Tailwind resets */
+  
+  html[data-scale='Small'] {
+      font-size: 14px !important; /* Compact */
+  }
+
+  html[data-scale='Medium'] {
+      font-size: 16px !important; /* Standard */
+  }
+
+  html[data-scale='Large'] {
+      font-size: 18px !important; /* Accessible */
+  }
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.5);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+    animation: fadeIn 0.3s ease-out forwards;
+}
