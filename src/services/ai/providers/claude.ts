@@ -19,6 +19,7 @@ import {
     DEFAULT_PROVIDER_CONFIGS
 } from "../types";
 import { getRateLimiter, RateLimiter } from "../rateLimiter";
+import { wrapError } from "../errors";
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -99,13 +100,24 @@ export class ClaudeProvider implements AIProvider {
         systemPrompt: string,
         userPrompt: string,
         schema: StandardSchema,
-        temperature: number = 0.3
+        temperature: number = 0.3,
+        signal?: AbortSignal
     ): Promise<GenerationResult> {
         if (!this.client) {
             throw new Error("Claude API not configured. Please provide an API key.");
         }
 
+        // Check if already aborted before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
         await this.rateLimiter.enforce();
+
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
 
         // Claude uses a different approach for structured output
         // We include the schema in the prompt and request JSON output
@@ -117,15 +129,18 @@ ${schemaDescription}
 
 IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
 
-        const response = await this.client.messages.create({
-            model: this.modelName,
-            max_tokens: 8192,
-            system: enhancedSystemPrompt,
-            messages: [
-                { role: 'user', content: userPrompt }
-            ],
-            temperature
-        });
+        const response = await this.client.messages.create(
+            {
+                model: this.modelName,
+                max_tokens: 8192,
+                system: enhancedSystemPrompt,
+                messages: [
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature
+            },
+            { signal }  // Pass AbortSignal to Anthropic SDK
+        );
 
         // Extract text from response
         const textContent = response.content.find(c => c.type === 'text');
@@ -153,7 +168,8 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         options: GenerationOptions,
         schema?: StandardSchema,
         allowedComponentIds?: string[],
-        temperature: number = 0.9
+        temperature: number = 0.9,
+        signal?: AbortSignal
     ): Promise<any[]> {
         if (!this.client) {
             throw new Error("Claude API not configured. Please provide an API key.");
@@ -162,17 +178,21 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         const effectiveSchema = schema || LEGACY_ENTITY_SCHEMA;
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, effectiveSchema);
 
-        // Retry logic with exponential backoff
-        const MAX_RETRIES = 3;
-        let attempt = 0;
-        let lastError: any;
+        // Check for abort before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
 
-        while (attempt < MAX_RETRIES) {
-            try {
-                attempt++;
-                await this.rateLimiter.enforce();
+        await this.rateLimiter.enforce();
 
-                const response = await this.client.messages.create({
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
+        try {
+            const response = await this.client.messages.create(
+                {
                     model: this.modelName,
                     max_tokens: 16384,
                     system: systemPrompt,
@@ -180,33 +200,27 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
                         { role: 'user', content: userPrompt }
                     ],
                     temperature
-                });
+                },
+                { signal }  // Pass AbortSignal to Anthropic SDK
+            );
 
-                // Extract text from response
-                const textContent = response.content.find(c => c.type === 'text');
-                const rawText = textContent?.type === 'text' ? textContent.text : "[]";
-                const cleanJson = this.cleanJsonOutput(rawText);
-                let parsedData = this.parseJsonWithSalvage(cleanJson);
+            // Extract text from response
+            const textContent = response.content.find(c => c.type === 'text');
+            const rawText = textContent?.type === 'text' ? textContent.text : "[]";
+            const cleanJson = this.cleanJsonOutput(rawText);
+            let parsedData = this.parseJsonWithSalvage(cleanJson);
 
-                if (!Array.isArray(parsedData)) {
-                    throw new Error("Model returned object instead of array.");
-                }
-
-                const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
-                return parsedData.map(item => this.normalizeEntity(item, validIds));
-
-            } catch (error: any) {
-                console.warn(`Claude Generation Attempt ${attempt} Failed:`, error.message);
-                lastError = error;
-                
-                if (attempt < MAX_RETRIES) {
-                    const delay = 1000 * Math.pow(2, attempt - 1);
-                    await new Promise(res => setTimeout(res, delay));
-                }
+            if (!Array.isArray(parsedData)) {
+                throw new Error("Model returned object instead of array.");
             }
-        }
 
-        throw new Error(`Generation failed after ${MAX_RETRIES} attempts. Last error: ${lastError?.message}`);
+            const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
+            return parsedData.map(item => this.normalizeEntity(item, validIds));
+
+        } catch (error: unknown) {
+            // Wrap and throw as LLMError for consistent error handling
+            throw wrapError(error, { provider: this.name, model: this.modelName });
+        }
     }
 
     // ==========================================

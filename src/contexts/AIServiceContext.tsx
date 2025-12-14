@@ -1,7 +1,9 @@
 /**
  * AI Service Context
  * 
- * Provides AI provider instance to the app based on user configuration.
+ * Provides LLMOrchestrator instance to the app based on user configuration.
+ * The orchestrator is the ONLY entry point for all LLM calls.
+ * 
  * Supports multiple providers (Gemini, OpenAI) and model selection.
  */
 
@@ -17,9 +19,15 @@ import {
     OpenAIProvider,
     getDefaultModel
 } from '../services/ai';
+import { LLMOrchestrator, getOrchestrator, resetOrchestrator } from '../services/ai/orchestrator';
 
 interface AIServiceContextType {
+    /** 
+     * @deprecated Use `orchestrator` instead. Direct provider access is discouraged.
+     */
     provider: AIProvider;
+    /** The LLMOrchestrator - the ONLY entry point for all LLM calls */
+    orchestrator: LLMOrchestrator;
     settings: AISettings;
     updateSettings: (settings: AISettings) => void;
     isConfigured: boolean;
@@ -111,17 +119,26 @@ export const AIServiceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         
         // Clear provider cache so next access gets fresh instance
         clearProviderCache();
+        
+        // Reset orchestrator to pick up new settings
+        resetOrchestrator();
     }, []);
 
     const isConfigured = provider.isConfigured();
 
+    // Create orchestrator instance (uses global singleton)
+    const orchestrator = useMemo(() => {
+        return getOrchestrator();
+    }, []);
+
     const value = useMemo(() => ({
         provider,
+        orchestrator,
         settings,
         updateSettings,
         isConfigured,
         error
-    }), [provider, settings, updateSettings, isConfigured, error]);
+    }), [provider, orchestrator, settings, updateSettings, isConfigured, error]);
 
     return (
         <AIServiceContext.Provider value={value}>
@@ -138,8 +155,19 @@ export const useAIService = () => {
     return ctx;
 };
 
-// Convenience hook to just get the provider
+/**
+ * @deprecated Use useOrchestrator instead. Direct provider access is discouraged.
+ */
 export const useAIProvider = (): AIProvider => {
     const { provider } = useAIService();
     return provider;
+};
+
+/**
+ * Convenience hook to get the LLMOrchestrator.
+ * This is the preferred way to access LLM functionality.
+ */
+export const useOrchestrator = (): LLMOrchestrator => {
+    const { orchestrator } = useAIService();
+    return orchestrator;
 };

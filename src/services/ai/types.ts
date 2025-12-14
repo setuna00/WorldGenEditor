@@ -156,16 +156,31 @@ export interface AIProvider {
     
     /**
      * Generate structured data with a schema constraint
+     * @param systemPrompt - System instruction
+     * @param userPrompt - User prompt
+     * @param schema - Output schema
+     * @param temperature - Sampling temperature (default 0.3)
+     * @param signal - Optional AbortSignal for cancellation
      */
     generateStructuredData(
         systemPrompt: string,
         userPrompt: string,
         schema: StandardSchema,
-        temperature?: number
+        temperature?: number,
+        signal?: AbortSignal
     ): Promise<GenerationResult>;
     
     /**
      * Generate batch of entities
+     * @param poolName - Target pool name
+     * @param userPrompt - User prompt
+     * @param count - Number of entities to generate
+     * @param worldContext - World context string
+     * @param options - Generation options
+     * @param schema - Output schema
+     * @param allowedComponentIds - Allowed component IDs filter
+     * @param temperature - Sampling temperature (default 0.9)
+     * @param signal - Optional AbortSignal for cancellation
      */
     generateBatch(
         poolName: string,
@@ -175,7 +190,8 @@ export interface AIProvider {
         options: GenerationOptions,
         schema?: StandardSchema,
         allowedComponentIds?: string[],
-        temperature?: number
+        temperature?: number,
+        signal?: AbortSignal
     ): Promise<any[]>;
     
     /**

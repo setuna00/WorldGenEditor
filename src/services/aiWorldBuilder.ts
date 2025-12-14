@@ -12,7 +12,9 @@ import { worldManager } from "../contexts/ServiceContext";
 import { ComponentDefinition, PoolCategory } from "../types";
 import { AIPrompts } from "./aiPrompts";
 import { buildSchemaForPool } from "./schemaBuilder";
-import { AIProvider, StandardSchema } from "./ai/types";
+import { StandardSchema } from "./ai/types";
+import { LLMOrchestrator, getOrchestrator } from "./ai/orchestrator";
+import { GenerationStage } from "./ai/fallbackRouter";
 
 // ==========================================
 // TYPES & INTERFACES
@@ -210,9 +212,13 @@ const COMPONENT_DESIGN_SCHEMA: StandardSchema = {
 // ==========================================
 
 /**
- * Creates an AIWorldBuilder instance bound to a specific AI provider
+ * Creates an AIWorldBuilder instance bound to the LLM Orchestrator
+ * 
+ * @param orchestrator - Optional orchestrator instance. If not provided, uses the global singleton.
  */
-export function createAIWorldBuilder(provider: AIProvider) {
+export function createAIWorldBuilder(orchestrator?: LLMOrchestrator) {
+    const orch = orchestrator || getOrchestrator();
+    
     return {
         // --- IDEATION PHASE ---
         async generateTitleGenreOptions(
@@ -225,8 +231,13 @@ export function createAIWorldBuilder(provider: AIProvider) {
             const finalSystem = prependPrefix(system, globalPrefix);
 
             try {
-                const result = await provider.generateStructuredData(finalSystem, user, IDEATION_SCHEMA, 0.7);
-                return { data: result.data, tokens: result.tokens };
+                const result = await orch.generateStructuredData(finalSystem, user, IDEATION_SCHEMA, {
+                    stage: 'ideation' as GenerationStage
+                });
+                if (result.success && result.data) {
+                    return { data: result.data.data, tokens: result.data.tokens };
+                }
+                return { data: { titles: [], genres: [] }, tokens: 0 };
             } catch (e) {
                 return { data: { titles: [], genres: [] }, tokens: 0 };
             }
@@ -242,12 +253,13 @@ export function createAIWorldBuilder(provider: AIProvider) {
             const { system, user } = AIPrompts.analysis(language, storyText, toneInstruction);
             const finalSystem = prependPrefix(system, globalPrefix);
 
-            try {
-                const result = await provider.generateStructuredData(finalSystem, user, ANALYSIS_SCHEMA, 0.1);
-                return { data: result.data, tokens: result.tokens };
-            } catch (error) {
-                throw new Error("Failed to analyze story structure.");
+            const result = await orch.generateStructuredData(finalSystem, user, ANALYSIS_SCHEMA, {
+                stage: 'analysis' as GenerationStage
+            });
+            if (result.success && result.data) {
+                return { data: result.data.data, tokens: result.data.tokens };
             }
+            throw new Error(result.error?.message || "Failed to analyze story structure.");
         },
 
         // --- ARCHITECTURE PHASE ---
@@ -265,12 +277,13 @@ export function createAIWorldBuilder(provider: AIProvider) {
             const { system, user } = AIPrompts.blueprint(title, genre, language, activePools, storyText, toneInstruction);
             const finalSystem = prependPrefix(system, globalPrefix);
 
-            try {
-                const result = await provider.generateStructuredData(finalSystem, user, BLUEPRINT_SCHEMA, 0.2);
-                return { data: result.data, tokens: result.tokens };
-            } catch (e) {
-                throw new Error("Failed to create blueprint");
+            const result = await orch.generateStructuredData(finalSystem, user, BLUEPRINT_SCHEMA, {
+                stage: 'blueprint' as GenerationStage
+            });
+            if (result.success && result.data) {
+                return { data: result.data.data, tokens: result.data.tokens };
             }
+            throw new Error(result.error?.message || "Failed to create blueprint");
         },
 
         // --- BUILD PHASE ---
@@ -293,7 +306,14 @@ export function createAIWorldBuilder(provider: AIProvider) {
                 const { system, user } = AIPrompts.componentDesign(poolDef.name, language, toneInstruction);
                 const finalSystem = prependPrefix(system, globalPrefix);
 
-                const result = await provider.generateStructuredData(finalSystem, user, COMPONENT_DESIGN_SCHEMA, 0.2);
+                const orchResult = await orch.generateStructuredData(finalSystem, user, COMPONENT_DESIGN_SCHEMA, {
+                    stage: 'component_design' as GenerationStage
+                });
+                if (!orchResult.success || !orchResult.data) {
+                    console.warn(`Failed to generate infrastructure for ${poolDef.name}`, orchResult.error);
+                    return null;
+                }
+                const result = orchResult.data;
                 const compDef = result.data;
                 
                 const cleanId = compDef.id.toLowerCase().replace(/\s+/g, '_');
@@ -370,8 +390,14 @@ export function createAIWorldBuilder(provider: AIProvider) {
             const seedSchema = buildSchemaForPool(poolStubForSchema, registryStub);
 
             try {
-                const result = await provider.generateStructuredData(finalSystem, user, seedSchema, 0.7);
-                return { seeds: result.data, tokens: result.tokens };
+                const orchResult = await orch.generateStructuredData(finalSystem, user, seedSchema, {
+                    stage: 'seed_content' as GenerationStage
+                });
+                if (orchResult.success && orchResult.data) {
+                    return { seeds: orchResult.data.data, tokens: orchResult.data.tokens };
+                }
+                console.warn(`Failed to generate seeds for ${poolDef.name}`, orchResult.error);
+                return { seeds: [], tokens: 0 };
             } catch (e) {
                 console.warn(`Failed to generate seeds for ${poolDef.name}`, e);
                 return { seeds: [], tokens: 0 };
@@ -556,3 +582,6 @@ export function createAIWorldBuilder(provider: AIProvider) {
 
 // Export type for the builder
 export type AIWorldBuilderType = ReturnType<typeof createAIWorldBuilder>;
+
+// Re-export orchestrator getter for convenience
+export { getOrchestrator } from "./ai/orchestrator";

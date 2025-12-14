@@ -15,6 +15,7 @@ import {
 } from "../types";
 import { standardToOpenAI } from "../schemaConverter";
 import { getRateLimiter, RateLimiter } from "../rateLimiter";
+import { wrapError } from "../errors";
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -95,32 +96,46 @@ export class OpenAIProvider implements AIProvider {
         systemPrompt: string,
         userPrompt: string,
         schema: StandardSchema,
-        temperature: number = 0.3
+        temperature: number = 0.3,
+        signal?: AbortSignal
     ): Promise<GenerationResult> {
         if (!this.client) {
             throw new Error("OpenAI API not configured. Please provide an API key.");
         }
 
+        // Check if already aborted before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
         await this.rateLimiter.enforce();
+
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
 
         const openaiSchema = standardToOpenAI(schema);
 
-        const response = await this.client.chat.completions.create({
-            model: this.modelName,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-            ],
-            response_format: {
-                type: 'json_schema',
-                json_schema: {
-                    name: 'structured_response',
-                    strict: true,
-                    schema: openaiSchema
-                }
+        const response = await this.client.chat.completions.create(
+            {
+                model: this.modelName,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                response_format: {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: 'structured_response',
+                        strict: true,
+                        schema: openaiSchema
+                    }
+                },
+                temperature
             },
-            temperature
-        });
+            { signal }  // Pass AbortSignal to OpenAI SDK
+        );
 
         const rawText = response.choices[0]?.message?.content || "{}";
         const tokens = response.usage?.total_tokens || 0;
@@ -144,7 +159,8 @@ export class OpenAIProvider implements AIProvider {
         options: GenerationOptions,
         schema?: StandardSchema,
         allowedComponentIds?: string[],
-        temperature: number = 0.9
+        temperature: number = 0.9,
+        signal?: AbortSignal
     ): Promise<any[]> {
         if (!this.client) {
             throw new Error("OpenAI API not configured. Please provide an API key.");
@@ -153,17 +169,21 @@ export class OpenAIProvider implements AIProvider {
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, !!schema);
         const openaiSchema = standardToOpenAI(schema || LEGACY_ENTITY_SCHEMA);
 
-        // Retry logic with exponential backoff
-        const MAX_RETRIES = 3;
-        let attempt = 0;
-        let lastError: any;
+        // Check for abort before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
 
-        while (attempt < MAX_RETRIES) {
-            try {
-                attempt++;
-                await this.rateLimiter.enforce();
+        await this.rateLimiter.enforce();
 
-                const response = await this.client.chat.completions.create({
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
+        try {
+            const response = await this.client.chat.completions.create(
+                {
                     model: this.modelName,
                     messages: [
                         { role: 'system', content: systemPrompt },
@@ -178,30 +198,24 @@ export class OpenAIProvider implements AIProvider {
                         }
                     },
                     temperature
-                });
+                },
+                { signal }  // Pass AbortSignal to OpenAI SDK
+            );
 
-                const rawText = response.choices[0]?.message?.content || "[]";
-                let parsedData = this.parseJsonWithSalvage(rawText);
+            const rawText = response.choices[0]?.message?.content || "[]";
+            let parsedData = this.parseJsonWithSalvage(rawText);
 
-                if (!Array.isArray(parsedData)) {
-                    throw new Error("Model returned object instead of array.");
-                }
-
-                const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
-                return parsedData.map(item => this.normalizeEntity(item, validIds));
-
-            } catch (error: any) {
-                console.warn(`OpenAI Generation Attempt ${attempt} Failed:`, error.message);
-                lastError = error;
-                
-                if (attempt < MAX_RETRIES) {
-                    const delay = 1000 * Math.pow(2, attempt - 1);
-                    await new Promise(res => setTimeout(res, delay));
-                }
+            if (!Array.isArray(parsedData)) {
+                throw new Error("Model returned object instead of array.");
             }
-        }
 
-        throw new Error(`Generation failed after ${MAX_RETRIES} attempts. Last error: ${lastError?.message}`);
+            const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
+            return parsedData.map(item => this.normalizeEntity(item, validIds));
+
+        } catch (error: unknown) {
+            // Wrap and throw as LLMError for consistent error handling
+            throw wrapError(error, { provider: this.name, model: this.modelName });
+        }
     }
 
     // ==========================================

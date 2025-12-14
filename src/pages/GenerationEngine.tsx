@@ -4,6 +4,7 @@ import { useWorld } from '../hooks/useWorld';
 import { LogContext } from '../contexts/LogContext';
 import { useToast } from '../contexts/ToastContext';
 import { useAIService } from '../contexts/AIServiceContext';
+import { GenerationStage } from '../services/ai/fallbackRouter';
 import { UniversalEntity, Pool, ReferenceItem } from '../types';
 import { Save, Check, Trash2, Link2, Plus, ArrowRight, X, Sliders, Cuboid, BookOpen, User, Wand2, ArrowUpRight, Minus, HelpCircle, Tag } from 'lucide-react';
 import { TagInput, LogViewer, ContextSelectorModal } from '../components/SharedForgeComponents';
@@ -21,7 +22,7 @@ interface GenerationEngineProps {
 
 const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asset' }) => {
     const { currentWorld, worldManager, refreshWorld, appSettings, forgeState, setForgeState } = useWorld();
-    const { provider: aiProvider, isConfigured: aiIsConfigured, settings: aiSettings } = useAIService();
+    const { orchestrator, isConfigured: aiIsConfigured, settings: aiSettings } = useAIService();
     const logContext = useContext(LogContext);
     const { toast } = useToast(); 
     const t = useTranslation();
@@ -250,15 +251,22 @@ const GenerationEngine: React.FC<GenerationEngineProps> = ({ defaultMode = 'Asse
             
             const validComponentIds = Object.keys(targetPool.defaultComponents);
 
-            let ecsEntities = await aiProvider.generateBatch(
+            const batchResult = await orchestrator.generateBatch(
                 targetPool.name,
                 prompt,
                 count,
                 worldContext,
                 commonOptions,
                 dynamicSchema,
-                validComponentIds
+                validComponentIds,
+                { stage: 'batch' as GenerationStage }
             );
+            
+            if (!batchResult.success || !batchResult.data) {
+                throw new Error(batchResult.error?.message || 'Batch generation failed');
+            }
+            
+            let ecsEntities = batchResult.data;
             
             // Log the generation
             addGlobalLog(logTitle, prompt, JSON.stringify(ecsEntities, null, 2));

@@ -15,6 +15,7 @@ import {
 } from "../types";
 import { standardToGemini } from "../schemaConverter";
 import { getRateLimiter, RateLimiter } from "../rateLimiter";
+import { wrapError } from "../errors";
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -90,19 +91,34 @@ export class GeminiProvider implements AIProvider {
         systemPrompt: string,
         userPrompt: string,
         schema: StandardSchema,
-        temperature: number = 0.3
+        temperature: number = 0.3,
+        signal?: AbortSignal
     ): Promise<GenerationResult> {
         if (!this.ai) {
             throw new Error("Gemini API not configured. Please provide an API key.");
         }
 
+        // Check if already aborted before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
         await this.rateLimiter.enforce();
+
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
 
         const geminiSchema = standardToGemini(schema);
 
-        const response = await this.ai.models.generateContent({
+        // Gemini SDK doesn't natively support AbortSignal.
+        // Implement "soft-cancel": race between API call and abort signal.
+        // NOTE: This does NOT stop server-side computation or billing.
+        // The request continues on Google's servers even after client-side abort.
+        const apiPromise = this.ai.models.generateContent({
             model: this.modelName,
-            contents: userPrompt,  // 改为字符串格式
+            contents: userPrompt,
             config: {
                 systemInstruction: systemPrompt,
                 responseMimeType: 'application/json',
@@ -110,6 +126,8 @@ export class GeminiProvider implements AIProvider {
                 temperature
             }
         });
+
+        const response = await this.raceWithAbort(apiPromise, signal);
 
         const rawText = response.text || "{}";
         const tokens = response.usageMetadata?.totalTokenCount || 0;
@@ -120,6 +138,41 @@ export class GeminiProvider implements AIProvider {
             tokens,
             raw: rawText
         };
+    }
+
+    /**
+     * Race a promise against an AbortSignal.
+     * Used for soft-cancel when SDK doesn't support AbortSignal natively.
+     * WARNING: This does NOT cancel the underlying API request - it only
+     * allows the client to stop waiting. Server computation/billing continues.
+     */
+    private raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (!signal) return promise;
+        
+        return new Promise<T>((resolve, reject) => {
+            // Check if already aborted
+            if (signal.aborted) {
+                reject(new DOMException('Operation aborted', 'AbortError'));
+                return;
+            }
+
+            // Handle abort event
+            const onAbort = () => {
+                reject(new DOMException('Operation aborted', 'AbortError'));
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+
+            // Race the promise
+            promise
+                .then((result) => {
+                    signal.removeEventListener('abort', onAbort);
+                    resolve(result);
+                })
+                .catch((error) => {
+                    signal.removeEventListener('abort', onAbort);
+                    reject(error);
+                });
+        });
     }
 
     // ==========================================
@@ -134,7 +187,8 @@ export class GeminiProvider implements AIProvider {
         options: GenerationOptions,
         schema?: StandardSchema,
         allowedComponentIds?: string[],
-        temperature: number = 0.9
+        temperature: number = 0.9,
+        signal?: AbortSignal
     ): Promise<any[]> {
         if (!this.ai) {
             throw new Error("Gemini API not configured. Please provide an API key.");
@@ -143,51 +197,49 @@ export class GeminiProvider implements AIProvider {
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, !!schema);
         const geminiSchema = standardToGemini(schema || LEGACY_ENTITY_SCHEMA);
 
-        // Retry logic with exponential backoff
-        const MAX_RETRIES = 3;
-        let attempt = 0;
-        let lastError: any;
-
-        while (attempt < MAX_RETRIES) {
-            try {
-                attempt++;
-                await this.rateLimiter.enforce();
-
-                const response = await this.ai.models.generateContent({
-                    model: this.modelName,
-                    contents: userPrompt,  // 改为字符串格式
-                    config: {
-                        systemInstruction: systemPrompt,
-                        responseMimeType: 'application/json',
-                        responseSchema: geminiSchema,
-                        temperature
-                    }
-                });
-
-                const rawText = response.text || "[]";
-                const sanitizedJson = this.cleanJsonOutput(rawText);
-
-                let parsedData = this.parseJsonWithSalvage(sanitizedJson);
-
-                if (!Array.isArray(parsedData)) {
-                    throw new Error("Model returned object instead of array.");
-                }
-
-                const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
-                return parsedData.map(item => this.normalizeEntity(item, validIds));
-
-            } catch (error: any) {
-                console.warn(`Gemini Generation Attempt ${attempt} Failed:`, error.message);
-                lastError = error;
-                
-                if (attempt < MAX_RETRIES) {
-                    const delay = 1000 * Math.pow(2, attempt - 1);
-                    await new Promise(res => setTimeout(res, delay));
-                }
-            }
+        // Check for abort before waiting for rate limit
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        throw new Error(`Generation failed after ${MAX_RETRIES} attempts. Last error: ${lastError?.message}`);
+        await this.rateLimiter.enforce();
+
+        // Check again after rate limit wait
+        if (signal?.aborted) {
+            throw new DOMException('Operation aborted', 'AbortError');
+        }
+
+        try {
+            // Use soft-cancel for Gemini (see raceWithAbort docs)
+            const apiPromise = this.ai.models.generateContent({
+                model: this.modelName,
+                contents: userPrompt,
+                config: {
+                    systemInstruction: systemPrompt,
+                    responseMimeType: 'application/json',
+                    responseSchema: geminiSchema,
+                    temperature
+                }
+            });
+
+            const response = await this.raceWithAbort(apiPromise, signal);
+
+            const rawText = response.text || "[]";
+            const sanitizedJson = this.cleanJsonOutput(rawText);
+
+            let parsedData = this.parseJsonWithSalvage(sanitizedJson);
+
+            if (!Array.isArray(parsedData)) {
+                throw new Error("Model returned object instead of array.");
+            }
+
+            const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
+            return parsedData.map(item => this.normalizeEntity(item, validIds));
+
+        } catch (error: unknown) {
+            // Wrap and throw as LLMError for consistent error handling
+            throw wrapError(error, { provider: this.name, model: this.modelName });
+        }
     }
 
     // ==========================================

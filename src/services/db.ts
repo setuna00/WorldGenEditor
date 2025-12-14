@@ -3,6 +3,46 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { World, UniversalEntity, RulebookPackage } from '../types';
 import { RollCandidate } from './rollerEngine';
 
+// ==========================================
+// BUILD STATE TYPES (for persistence)
+// ==========================================
+
+export type PoolBuildStatus = 'pending' | 'infrastructure' | 'generating' | 'persisting' | 'completed' | 'failed';
+
+export interface PersistedPoolState {
+    poolName: string;
+    status: PoolBuildStatus;
+    infrastructurePersisted: boolean;
+    seedsPersisted: boolean;
+    seedsPersistedCount: number;
+    seedsTotalCount: number;
+    error?: string;
+    lastUpdatedAt: number;
+    componentId?: string;
+    tokensUsed: number;
+}
+
+export interface PersistedBuildState {
+    buildId: string;
+    worldId: string;
+    startedAt: number;
+    completedAt?: number;
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    pools: Record<string, PersistedPoolState>;
+    totalTokens: number;
+    currentStage: string;
+    progress: number;
+}
+
+export interface PersistedSeedKey {
+    /** Composite key: buildId:poolName:idempotencyKey */
+    id: string;
+    buildId: string;
+    poolName: string;
+    idempotencyKey: string;
+    persistedAt: number;
+}
+
 interface NexusDB extends DBSchema {
   worlds: {
     key: string;
@@ -23,10 +63,28 @@ interface NexusDB extends DBSchema {
         'by-component': string; 
     };
   };
+  // NEW: Build state persistence for crash recovery
+  buildStates: {
+    key: string;
+    value: PersistedBuildState;
+    indexes: {
+        'by-world': string;
+        'by-status': string;
+    };
+  };
+  // NEW: Persisted seed keys for idempotency
+  persistedSeeds: {
+    key: string;
+    value: PersistedSeedKey;
+    indexes: {
+        'by-build': string;
+        'by-build-pool': [string, string];
+    };
+  };
 }
 
 const DB_NAME = 'nexus-core-db';
-const DB_VERSION = 4; 
+const DB_VERSION = 5; 
 
 class DatabaseService {
   private dbPromise: Promise<IDBPDatabase<NexusDB>>;
@@ -55,6 +113,21 @@ class DatabaseService {
             const entityStore = transaction.objectStore('entities');
             if (!entityStore.indexNames.contains('by-component')) {
                 entityStore.createIndex('by-component', 'activeComponents', { multiEntry: true });
+            }
+        }
+        // NEW: Build state and seed idempotency stores (v5)
+        if (oldVersion < 5) {
+            // Build states store
+            if (!db.objectStoreNames.contains('buildStates')) {
+                const buildStore = db.createObjectStore('buildStates', { keyPath: 'buildId' });
+                buildStore.createIndex('by-world', 'worldId');
+                buildStore.createIndex('by-status', 'status');
+            }
+            // Persisted seeds store (for idempotency)
+            if (!db.objectStoreNames.contains('persistedSeeds')) {
+                const seedStore = db.createObjectStore('persistedSeeds', { keyPath: 'id' });
+                seedStore.createIndex('by-build', 'buildId');
+                seedStore.createIndex('by-build-pool', ['buildId', 'poolName']);
             }
         }
       },
@@ -368,6 +441,209 @@ class DatabaseService {
         cursor = await cursor.continue();
     }
     return results;
+  }
+
+  // ==========================================
+  // BUILD STATE OPERATIONS
+  // ==========================================
+
+  /**
+   * Save or update a build state
+   */
+  async saveBuildState(state: PersistedBuildState): Promise<void> {
+    const db = await this.dbPromise;
+    await db.put('buildStates', state);
+  }
+
+  /**
+   * Load a build state by ID
+   */
+  async loadBuildState(buildId: string): Promise<PersistedBuildState | undefined> {
+    const db = await this.dbPromise;
+    return db.get('buildStates', buildId);
+  }
+
+  /**
+   * Get all incomplete (running) builds for a world
+   */
+  async getIncompleteBuildsForWorld(worldId: string): Promise<PersistedBuildState[]> {
+    const db = await this.dbPromise;
+    const tx = db.transaction('buildStates', 'readonly');
+    const index = tx.store.index('by-world');
+    
+    const results: PersistedBuildState[] = [];
+    let cursor = await index.openCursor(IDBKeyRange.only(worldId));
+    
+    while (cursor) {
+        const state = cursor.value;
+        if (state.status === 'running') {
+            results.push(state);
+        }
+        cursor = await cursor.continue();
+    }
+    
+    return results;
+  }
+
+  /**
+   * Get the most recent incomplete build (any world)
+   * Useful for recovery prompt on app start
+   */
+  async getMostRecentIncompleteBuild(): Promise<PersistedBuildState | undefined> {
+    const db = await this.dbPromise;
+    const tx = db.transaction('buildStates', 'readonly');
+    const index = tx.store.index('by-status');
+    
+    let cursor = await index.openCursor(IDBKeyRange.only('running'));
+    let mostRecent: PersistedBuildState | undefined;
+    
+    while (cursor) {
+        const state = cursor.value;
+        if (!mostRecent || state.startedAt > mostRecent.startedAt) {
+            mostRecent = state;
+        }
+        cursor = await cursor.continue();
+    }
+    
+    return mostRecent;
+  }
+
+  /**
+   * Delete a build state and its associated seed keys
+   */
+  async deleteBuildState(buildId: string): Promise<void> {
+    const db = await this.dbPromise;
+    const tx = db.transaction(['buildStates', 'persistedSeeds'], 'readwrite');
+    
+    // Delete build state
+    await tx.objectStore('buildStates').delete(buildId);
+    
+    // Delete associated seed keys
+    const seedStore = tx.objectStore('persistedSeeds');
+    const index = seedStore.index('by-build');
+    let cursor = await index.openKeyCursor(IDBKeyRange.only(buildId));
+    
+    while (cursor) {
+        await seedStore.delete(cursor.primaryKey);
+        cursor = await cursor.continue();
+    }
+    
+    await tx.done;
+  }
+
+  /**
+   * Clean up old completed builds (keep last N)
+   */
+  async cleanupOldBuilds(keepCount: number = 10): Promise<number> {
+    const db = await this.dbPromise;
+    const allStates = await db.getAll('buildStates');
+    
+    // Sort by startedAt descending
+    const completed = allStates
+        .filter(s => s.status === 'completed' || s.status === 'cancelled')
+        .sort((a, b) => b.startedAt - a.startedAt);
+    
+    const toDelete = completed.slice(keepCount);
+    
+    for (const state of toDelete) {
+        await this.deleteBuildState(state.buildId);
+    }
+    
+    return toDelete.length;
+  }
+
+  // ==========================================
+  // SEED IDEMPOTENCY OPERATIONS
+  // ==========================================
+
+  /**
+   * Record a persisted seed for idempotency tracking
+   */
+  async recordPersistedSeed(
+    buildId: string, 
+    poolName: string, 
+    idempotencyKey: string
+  ): Promise<void> {
+    const db = await this.dbPromise;
+    const id = `${buildId}:${poolName}:${idempotencyKey}`;
+    
+    await db.put('persistedSeeds', {
+        id,
+        buildId,
+        poolName,
+        idempotencyKey,
+        persistedAt: Date.now()
+    });
+  }
+
+  /**
+   * Check if a seed was already persisted (idempotency check)
+   */
+  async isSeedPersisted(
+    buildId: string, 
+    poolName: string, 
+    idempotencyKey: string
+  ): Promise<boolean> {
+    const db = await this.dbPromise;
+    const id = `${buildId}:${poolName}:${idempotencyKey}`;
+    const existing = await db.get('persistedSeeds', id);
+    return !!existing;
+  }
+
+  /**
+   * Get all persisted seed keys for a build+pool
+   * Used for recovery to populate in-memory set
+   */
+  async getPersistedSeedKeys(
+    buildId: string, 
+    poolName: string
+  ): Promise<Set<string>> {
+    const db = await this.dbPromise;
+    const tx = db.transaction('persistedSeeds', 'readonly');
+    const index = tx.store.index('by-build-pool');
+    
+    const keys = new Set<string>();
+    let cursor = await index.openCursor(IDBKeyRange.only([buildId, poolName]));
+    
+    while (cursor) {
+        keys.add(cursor.value.idempotencyKey);
+        cursor = await cursor.continue();
+    }
+    
+    return keys;
+  }
+
+  /**
+   * Get all persisted seed keys for a build (all pools)
+   */
+  async getAllPersistedSeedKeysForBuild(
+    buildId: string
+  ): Promise<Map<string, Set<string>>> {
+    const db = await this.dbPromise;
+    const tx = db.transaction('persistedSeeds', 'readonly');
+    const index = tx.store.index('by-build');
+    
+    const result = new Map<string, Set<string>>();
+    let cursor = await index.openCursor(IDBKeyRange.only(buildId));
+    
+    while (cursor) {
+        const { poolName, idempotencyKey } = cursor.value;
+        if (!result.has(poolName)) {
+            result.set(poolName, new Set());
+        }
+        result.get(poolName)!.add(idempotencyKey);
+        cursor = await cursor.continue();
+    }
+    
+    return result;
+  }
+
+  /**
+   * Get count of persisted seeds for a build+pool
+   */
+  async getPersistedSeedCount(buildId: string, poolName: string): Promise<number> {
+    const db = await this.dbPromise;
+    return db.countFromIndex('persistedSeeds', 'by-build-pool', [buildId, poolName]);
   }
 }
 
