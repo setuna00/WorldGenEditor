@@ -77,6 +77,26 @@ export interface RetryResult<T> {
 }
 
 /**
+ * Timing information from a single attempt
+ */
+export interface AttemptTimingInfo {
+    /** Error from the attempt, null if successful */
+    error: LLMError | null;
+    /** Attempt number (1-based) */
+    attemptNumber: number;
+    /** Time spent waiting for rate limit (ms) */
+    rateLimitWaitMs: number;
+    /** Time spent waiting for concurrency slot (ms) */
+    slotWaitMs: number;
+    /** Actual API execution time (ms) */
+    executionTimeMs: number;
+    /** Whether the attempt was cancelled */
+    cancelled: boolean;
+    /** Whether the attempt timed out */
+    timedOut: boolean;
+}
+
+/**
  * Options for withRetry
  */
 export interface WithRetryOptions {
@@ -91,8 +111,11 @@ export interface WithRetryOptions {
     retryConfig?: Partial<RetryConfig>;
     /** Task ID for debugging */
     taskId?: string;
-    /** Callback after each attempt (for circuit breaker integration) */
-    onAttemptComplete?: (error: LLMError | null, attemptNumber: number) => void;
+    /** 
+     * Callback after each attempt (for circuit breaker and telemetry integration).
+     * Receives detailed timing information from the scheduler.
+     */
+    onAttemptComplete?: (info: AttemptTimingInfo) => void;
 }
 
 // ==========================================
@@ -344,9 +367,17 @@ export class RetryManager {
 
             // Success!
             if (taskResult.success) {
-                // Notify callback (for circuit breaker)
+                // Notify callback with timing info (for circuit breaker and telemetry)
                 if (options.onAttemptComplete) {
-                    options.onAttemptComplete(null, attemptNumber);
+                    options.onAttemptComplete({
+                        error: null,
+                        attemptNumber,
+                        rateLimitWaitMs: taskResult.rateLimitWaitMs,
+                        slotWaitMs: taskResult.slotWaitMs,
+                        executionTimeMs: taskResult.executionTimeMs,
+                        cancelled: false,
+                        timedOut: false
+                    });
                 }
                 
                 return {
@@ -367,9 +398,17 @@ export class RetryManager {
                 : wrapError(new Error('Unknown error'), errorContext);
             attemptErrors.push(error);
             
-            // Notify callback (for circuit breaker)
+            // Notify callback with timing info (for circuit breaker and telemetry)
             if (options.onAttemptComplete) {
-                options.onAttemptComplete(error, attemptNumber);
+                options.onAttemptComplete({
+                    error,
+                    attemptNumber,
+                    rateLimitWaitMs: taskResult.rateLimitWaitMs,
+                    slotWaitMs: taskResult.slotWaitMs,
+                    executionTimeMs: taskResult.executionTimeMs,
+                    cancelled: taskResult.cancelled,
+                    timedOut: taskResult.timedOut
+                });
             }
 
             // Track parse attempts separately

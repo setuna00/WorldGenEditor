@@ -18,8 +18,10 @@ import {
     GenerationResult,
     DEFAULT_PROVIDER_CONFIGS
 } from "../types";
-import { getRateLimiter, RateLimiter } from "../rateLimiter";
 import { wrapError } from "../errors";
+
+// NOTE: Rate limiting is now handled exclusively by the Scheduler.
+// Providers should NOT implement their own rate limiting to avoid double-limiting.
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -44,7 +46,6 @@ export class ClaudeProvider implements AIProvider {
     
     private client: Anthropic | null = null;
     private modelName: string;
-    private rateLimiter: RateLimiter;
     private apiKey: string;
 
     constructor(config?: Partial<AIProviderConfig>) {
@@ -56,12 +57,6 @@ export class ClaudeProvider implements AIProvider {
                       '';
         
         this.modelName = config?.model || defaults.model || 'claude-sonnet-4-5';
-        
-        const rateConfig = config?.rateLimit || defaults.rateLimit!;
-        this.rateLimiter = getRateLimiter('Claude', {
-            maxRequests: rateConfig.maxRequests,
-            windowMs: rateConfig.windowMs
-        });
 
         if (this.apiKey) {
             this.client = new Anthropic({ 
@@ -107,17 +102,12 @@ export class ClaudeProvider implements AIProvider {
             throw new Error("Claude API not configured. Please provide an API key.");
         }
 
-        // Check if already aborted before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         // Claude uses a different approach for structured output
         // We include the schema in the prompt and request JSON output
@@ -178,17 +168,12 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         const effectiveSchema = schema || LEGACY_ENTITY_SCHEMA;
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, effectiveSchema);
 
-        // Check for abort before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         try {
             const response = await this.client.messages.create(

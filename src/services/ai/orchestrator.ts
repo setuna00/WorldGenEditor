@@ -29,7 +29,7 @@ import {
 } from './types';
 import { LLMError, wrapError, isFallbackAllowed, makeProviderKey, WrapErrorContext } from './errors';
 import { UnifiedScheduler, getScheduler } from './scheduler';
-import { RetryManager, getRetryManager, RetryContext, RetryResult } from './retryManager';
+import { RetryManager, getRetryManager, RetryContext, RetryResult, AttemptTimingInfo } from './retryManager';
 import { CircuitBreaker, getCircuitBreaker, makeCircuitKey } from './circuitBreaker';
 import { 
     FallbackRouter, 
@@ -370,20 +370,20 @@ export class LLMOrchestrator {
                     timeoutMs: options.timeoutMs ?? this.config.defaultTimeoutMs,
                     signal: options.signal,
                     taskId: options.taskId,
-                    onAttemptComplete: (error, attemptNumber) => {
+                    onAttemptComplete: (info: AttemptTimingInfo) => {
                         // Record outcome for circuit breaker
-                        this.circuitBreaker.recordOutcome(circuitKey, error);
+                        this.circuitBreaker.recordOutcome(circuitKey, info.error);
                         
-                        // Record telemetry
+                        // Record telemetry with real timing data from scheduler
                         telemetry.totalAttempts++;
                         telemetry.attempts.push({
                             providerKey,
-                            attemptNumber,
-                            success: error === null,
-                            errorCategory: error?.category,
-                            queueWaitMs: 0,  // Will be updated if we have more detail
-                            slotWaitMs: 0,
-                            apiDurationMs: 0,
+                            attemptNumber: info.attemptNumber,
+                            success: info.error === null,
+                            errorCategory: info.error?.category,
+                            queueWaitMs: info.rateLimitWaitMs,
+                            slotWaitMs: info.slotWaitMs,
+                            apiDurationMs: info.executionTimeMs,
                             timestamp: Date.now()
                         });
                     }

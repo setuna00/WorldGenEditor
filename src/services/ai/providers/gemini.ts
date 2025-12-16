@@ -14,8 +14,10 @@ import {
     DEFAULT_PROVIDER_CONFIGS
 } from "../types";
 import { standardToGemini } from "../schemaConverter";
-import { getRateLimiter, RateLimiter } from "../rateLimiter";
 import { wrapError } from "../errors";
+
+// NOTE: Rate limiting is now handled exclusively by the Scheduler.
+// Providers should NOT implement their own rate limiting to avoid double-limiting.
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -40,7 +42,6 @@ export class GeminiProvider implements AIProvider {
     
     private ai: GoogleGenAI | null = null;
     private modelName: string;
-    private rateLimiter: RateLimiter;
     private apiKey: string;
 
     constructor(config?: Partial<AIProviderConfig>) {
@@ -53,12 +54,6 @@ export class GeminiProvider implements AIProvider {
                       '';
         
         this.modelName = config?.model || defaults.model || 'gemini-2.5-flash';
-        
-        const rateConfig = config?.rateLimit || defaults.rateLimit!;
-        this.rateLimiter = getRateLimiter('Gemini', {
-            maxRequests: rateConfig.maxRequests,
-            windowMs: rateConfig.windowMs
-        });
 
         if (this.apiKey) {
             this.ai = new GoogleGenAI({ apiKey: this.apiKey });
@@ -98,17 +93,12 @@ export class GeminiProvider implements AIProvider {
             throw new Error("Gemini API not configured. Please provide an API key.");
         }
 
-        // Check if already aborted before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         const geminiSchema = standardToGemini(schema);
 
@@ -197,17 +187,12 @@ export class GeminiProvider implements AIProvider {
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, !!schema);
         const geminiSchema = standardToGemini(schema || LEGACY_ENTITY_SCHEMA);
 
-        // Check for abort before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         try {
             // Use soft-cancel for Gemini (see raceWithAbort docs)

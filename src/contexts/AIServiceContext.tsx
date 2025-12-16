@@ -4,32 +4,26 @@
  * Provides LLMOrchestrator instance to the app based on user configuration.
  * The orchestrator is the ONLY entry point for all LLM calls.
  * 
- * Supports multiple providers (Gemini, OpenAI) and model selection.
+ * IMPORTANT: Direct provider access has been removed.
+ * All LLM calls MUST go through the orchestrator.
  */
 
 import React, { createContext, useContext, useMemo, useCallback, useState } from 'react';
 import { 
-    AIProvider, 
     AIProviderType, 
     AISettings, 
     DEFAULT_AI_SETTINGS,
-    PROVIDER_INFO,
     clearProviderCache,
-    GeminiProvider,
-    OpenAIProvider,
     getDefaultModel
 } from '../services/ai';
 import { LLMOrchestrator, getOrchestrator, resetOrchestrator } from '../services/ai/orchestrator';
 
 interface AIServiceContextType {
-    /** 
-     * @deprecated Use `orchestrator` instead. Direct provider access is discouraged.
-     */
-    provider: AIProvider;
     /** The LLMOrchestrator - the ONLY entry point for all LLM calls */
     orchestrator: LLMOrchestrator;
     settings: AISettings;
     updateSettings: (settings: AISettings) => void;
+    /** Whether an API key is configured for the current provider */
     isConfigured: boolean;
     error: string | null;
 }
@@ -45,6 +39,22 @@ function getEnvKeyForProvider(providerType: AIProviderType): string {
     }
     // Default to Gemini env vars
     return process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+}
+
+/**
+ * Check if an API key is configured for the given provider.
+ * Does NOT create a provider instance - just checks the key exists.
+ */
+function checkIsConfigured(settings: AISettings): boolean {
+    let apiKey = '';
+    
+    if (settings.useCustomKey && settings.apiKey) {
+        apiKey = settings.apiKey;
+    } else {
+        apiKey = getEnvKeyForProvider(settings.provider);
+    }
+    
+    return !!apiKey && apiKey.length > 0;
 }
 
 export const AIServiceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -68,46 +78,10 @@ export const AIServiceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const [error, setError] = useState<string | null>(null);
 
-    // Create provider based on settings
-    const provider = useMemo<AIProvider>(() => {
-        setError(null);
-        
-        try {
-            // Determine API key: custom key or environment variable
-            let apiKey = '';
-            
-            if (settings.useCustomKey && settings.apiKey) {
-                apiKey = settings.apiKey;
-            } else {
-                // Fall back to environment variable based on provider
-                apiKey = getEnvKeyForProvider(settings.provider);
-            }
-
-            // Create the appropriate provider
-            switch (settings.provider) {
-                case 'openai':
-                    return new OpenAIProvider({
-                        apiKey,
-                        model: settings.model
-                    });
-                
-                case 'gemini':
-                default:
-                    return new GeminiProvider({
-                        apiKey,
-                        model: settings.model
-                    });
-            }
-        } catch (e: any) {
-            setError(e.message);
-            // Return unconfigured provider as fallback
-            return new GeminiProvider({ apiKey: '' });
-        }
-    }, [settings]);
-
     // Update settings and persist
     const updateSettings = useCallback((newSettings: AISettings) => {
         setSettings(newSettings);
+        setError(null);
         
         // Persist to localStorage
         const toStore = {
@@ -124,7 +98,8 @@ export const AIServiceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         resetOrchestrator();
     }, []);
 
-    const isConfigured = provider.isConfigured();
+    // Check if configured based on settings (no provider instantiation needed)
+    const isConfigured = useMemo(() => checkIsConfigured(settings), [settings]);
 
     // Create orchestrator instance (uses global singleton)
     const orchestrator = useMemo(() => {
@@ -132,13 +107,12 @@ export const AIServiceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, []);
 
     const value = useMemo(() => ({
-        provider,
         orchestrator,
         settings,
         updateSettings,
         isConfigured,
         error
-    }), [provider, orchestrator, settings, updateSettings, isConfigured, error]);
+    }), [orchestrator, settings, updateSettings, isConfigured, error]);
 
     return (
         <AIServiceContext.Provider value={value}>
@@ -156,16 +130,9 @@ export const useAIService = () => {
 };
 
 /**
- * @deprecated Use useOrchestrator instead. Direct provider access is discouraged.
- */
-export const useAIProvider = (): AIProvider => {
-    const { provider } = useAIService();
-    return provider;
-};
-
-/**
  * Convenience hook to get the LLMOrchestrator.
- * This is the preferred way to access LLM functionality.
+ * This is the ONLY way to access LLM functionality.
+ * All LLM calls MUST go through the orchestrator.
  */
 export const useOrchestrator = (): LLMOrchestrator => {
     const { orchestrator } = useAIService();

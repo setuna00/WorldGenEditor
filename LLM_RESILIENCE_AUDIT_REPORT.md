@@ -50,10 +50,8 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 ```
 
 **遗留问题**:
-- ⚠️ **P1**: Providers仍使用独立的 `rateLimiter` (openai.ts:57, gemini.ts:58)
-  - **证据**: `WorldGenEditor/src/services/ai/providers/openai.ts:57-60`, `gemini.ts:58-61`
-  - **影响**: 与scheduler的rate limit可能重复/冲突
-  - **修复建议**: 移除provider内部的rateLimiter，完全依赖scheduler的rate limit
+- ~~⚠️ **P1**: Providers仍使用独立的 `rateLimiter`~~ ✅ **已修复** (2024-12-19)
+  - 已移除所有 provider 中的 rateLimiter，现在完全依赖 scheduler 的 rate limit
 
 ---
 
@@ -103,10 +101,9 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 - ⚠️ `providers/gemini.ts:130` - 使用 `raceWithAbort` (软取消，不停止服务器端计算)
 
 **问题**:
-- ⚠️ **P2**: Gemini provider的abort是"软取消"，服务器端请求继续执行和计费
-  - **证据**: `WorldGenEditor/src/services/ai/providers/gemini.ts:115-118, 149-176`
-  - **影响**: 用户取消后仍可能被计费
-  - **修复建议**: 文档化此限制，或考虑使用支持真正取消的Gemini API版本
+- ~~⚠️ **P2**: Gemini provider的abort是"软取消"~~ ✅ **已文档化** (2024-12-19)
+  - 详见 `docs/LLM_PROVIDER_NOTES.md`
+  - 当前 UI 在构建过程中禁用取消按钮，避免用户误操作
 
 ---
 
@@ -143,10 +140,9 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 
 **当前实现**:
 - ✅ `scheduler.ts:56-59` - 提供 `rateLimitWaitMs`, `slotWaitMs`, `executionTimeMs`
-- ⚠️ **P1**: `orchestrator.ts:384-387` - telemetry中的这些字段被硬编码为0
-  - **证据**: `WorldGenEditor/src/services/ai/orchestrator.ts:384-387`
-  - **影响**: 无法获取真实的等待时间统计
-  - **修复建议**: 从retryManager的TaskResult中提取这些字段并填充到telemetry
+- ~~⚠️ **P1**: telemetry中timing字段被硬编码为0~~ ✅ **已修复** (2024-12-19)
+  - 现在 `retryManager` 通过 `onAttemptComplete` 回调传递完整的 timing 信息
+  - `orchestrator` 使用这些真实值填充 telemetry
 
 ---
 
@@ -224,96 +220,63 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 
 ### P0 - 会导致错误/绕过/数据重复
 
-#### P0-1: AIServiceContext仍暴露直接provider访问
-- **文件**: `WorldGenEditor/src/contexts/AIServiceContext.tsx`
-- **行号**: 28-29, 161-164
-- **证据**:
-  ```typescript
-  // 行28-29
-  provider: AIProvider;  // @deprecated但仍在
-  // 行161-164
-  export const useAIProvider = (): AIProvider => {
-      const { provider } = useAIService();
-      return provider;
-  };
-  ```
-- **影响**: 调用方可能绕过orchestrator，直接使用provider，导致：
-  - 绕过retry/fallback/circuit breaker
-  - 绕过rate limit和并发控制
-  - 统计失真
-- **修复建议**: 
-  1. 移除 `provider` 字段
-  2. 移除 `useAIProvider()` hook
-  3. 或改为抛出错误，强制使用 `useOrchestrator()`
+#### ~~P0-1: AIServiceContext仍暴露直接provider访问~~ ✅ 已修复 (2024-12-19)
+- **状态**: ✅ **已修复**
+- **修复内容**:
+  1. 移除了 `provider` 字段从 `AIServiceContextType`
+  2. 移除了 `useAIProvider()` hook
+  3. 改为使用 `checkIsConfigured(settings)` 函数计算 `isConfigured`，不再依赖 provider 实例
+  4. 修复了 `WorldForgeModal.tsx` 改用 `orchestrator` 而非 `provider`
+- **验证**:
+  - `rg "useAIProvider" WorldGenEditor/src -n` → 0 匹配
+  - `rg "provider.*=.*useAIService" WorldGenEditor/src -n` → 0 匹配
+  - 所有 linter 检查通过
 
 ---
 
 ### P1 - 统计失真
 
-#### P1-1: Orchestrator telemetry缺少真实的等待时间
-- **文件**: `WorldGenEditor/src/services/ai/orchestrator.ts`
-- **行号**: 384-387
-- **证据**:
-  ```typescript
-  telemetry.attempts.push({
-      providerKey,
-      attemptNumber,
-      success: error === null,
-      errorCategory: error?.category,
-      queueWaitMs: 0,  // ❌ 硬编码为0
-      slotWaitMs: 0,    // ❌ 硬编码为0
-      apiDurationMs: 0, // ❌ 硬编码为0
-      timestamp: Date.now()
-  });
-  ```
-- **影响**: 无法获取真实的rate limit等待、slot等待、API执行时间，影响性能分析和优化
-- **修复建议**: 
-  1. 修改 `retryManager.withRetry` 返回TaskResult的详细信息
-  2. 或在 `onAttemptComplete` 回调中传递TaskResult
-  3. 从TaskResult中提取 `rateLimitWaitMs`, `slotWaitMs`, `executionTimeMs` 并填充到telemetry
+#### ~~P1-1: Orchestrator telemetry缺少真实的等待时间~~ ✅ 已修复 (2024-12-19)
+- **状态**: ✅ **已修复**
+- **修复内容**:
+  1. 新增 `AttemptTimingInfo` 接口，包含 timing 详细信息
+  2. 修改 `retryManager.ts` 的 `onAttemptComplete` 回调签名，传递完整的 timing 信息
+  3. 在每次 attempt 完成时从 `TaskResult` 提取 `rateLimitWaitMs`, `slotWaitMs`, `executionTimeMs`
+  4. 修改 `orchestrator.ts` 使用新签名，填充真实的 timing 数据到 telemetry
+- **验证**:
+  - `rg "queueWaitMs:\s*0|slotWaitMs:\s*0|apiDurationMs:\s*0" WorldGenEditor/src/services/ai/orchestrator.ts` → 仅在 CIRCUIT_OPEN 分支有 0 值（预期行为）
+  - 正常 attempt 的 timing 现在从 scheduler 的 TaskResult 获取真实值
+  - 所有 linter 检查通过
 
-#### P1-2: Providers仍使用独立的rateLimiter
-- **文件**: `WorldGenEditor/src/services/ai/providers/openai.ts`, `gemini.ts`
-- **行号**: openai.ts:57-60, gemini.ts:58-61
-- **证据**:
-  ```typescript
-  // openai.ts:57-60
-  this.rateLimiter = getRateLimiter('OpenAI', {
-      maxRequests: rateConfig.maxRequests,
-      windowMs: rateConfig.windowMs
-  });
-  // 然后在 generateStructuredData/generateBatch 中调用
-  await this.rateLimiter.enforce();
-  ```
-- **影响**: 
-  - 与scheduler的rate limit可能重复等待
-  - 两个rate limiter状态不同步，可能导致实际请求超过限制
-  - 统计失真（scheduler统计的请求数 vs 实际发出的请求数）
-- **修复建议**: 
-  1. 移除provider内部的 `rateLimiter.enforce()` 调用
-  2. 完全依赖scheduler的rate limit控制
-  3. 保留rateLimiter实例仅用于向后兼容（如果其他地方依赖）
+#### ~~P1-2: Providers仍使用独立的rateLimiter~~ ✅ 已修复 (2024-12-19)
+- **状态**: ✅ **已修复**
+- **修复内容**:
+  1. 移除了所有4个provider (openai.ts, deepseek.ts, gemini.ts, claude.ts) 中的 `getRateLimiter` import
+  2. 移除了 `private rateLimiter: RateLimiter` 字段
+  3. 移除了构造函数中的 `this.rateLimiter = getRateLimiter(...)` 初始化
+  4. 移除了 `generateStructuredData` 和 `generateBatch` 中的 `await this.rateLimiter.enforce()` 调用
+  5. 添加了注释说明 rate limiting 现在由 Scheduler 统一处理
+- **验证**:
+  - `rg "rateLimiter\.enforce|getRateLimiter" WorldGenEditor/src/services/ai/providers -n` → 0 匹配
+  - 所有 linter 检查通过
+- **Scheduler 配置验证**:
+  - Scheduler 的 `DEFAULT_CONFIG.rateLimits` 包含所有 provider 的限流配置
+  - Gemini: 14 req/60s, OpenAI/DeepSeek/Claude: 50 req/60s
+  - 这些配置与之前 provider 内部的配置一致，确保行为不变
 
 ---
 
 ### P2 - 代码味道/潜在问题
 
-#### P2-1: Gemini provider的abort是"软取消"
-- **文件**: `WorldGenEditor/src/services/ai/providers/gemini.ts`
-- **行号**: 115-118, 149-176
-- **证据**:
-  ```typescript
-  // 行115-118
-  // Gemini SDK doesn't natively support AbortSignal.
-  // Implement "soft-cancel": race between API call and abort signal.
-  // NOTE: This does NOT stop server-side computation or billing.
-  // The request continues on Google's servers even after client-side abort.
-  ```
-- **影响**: 用户取消后仍可能被计费，用户体验不佳
-- **修复建议**: 
-  1. 在文档中明确说明此限制
-  2. 考虑在UI中提示用户Gemini请求取消后仍可能计费
-  3. 或研究Gemini API是否有支持真正取消的版本
+#### ~~P2-1: Gemini provider的abort是"软取消"~~ ✅ 已文档化 (2024-12-19)
+- **状态**: ✅ **已文档化**
+- **说明**: Gemini SDK 不支持原生 `AbortSignal`，取消是客户端行为，服务器端继续执行并计费
+- **文档化内容**:
+  1. 创建 `docs/LLM_PROVIDER_NOTES.md`，详细说明各 provider 的取消行为差异
+  2. 明确标注 Gemini 的 soft-cancel 限制和计费影响
+  3. 在 README.md 中添加文档链接
+- **当前 UI 状态**: 构建过程中取消按钮已禁用，用户无法在生成中途取消
+- **未来改进**: 如需添加取消功能，应在 UI 中提示 Gemini 的计费限制
 
 ---
 
@@ -376,14 +339,15 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 - ✅ **不变量5**: Build pipeline幂等和持久化 - **成立**
 
 **发现的问题**:
-- **P0问题**: 1个（直接provider访问仍暴露）
-- **P1问题**: 2个（统计失真）
-- **P2问题**: 1个（Gemini abort限制）
+- **P0问题**: ~~1个~~ → 0个 ✅ (P0-1 已修复)
+- **P1问题**: ~~2个~~ → 0个 ✅ (P1-1, P1-2 均已修复)
+- **P2问题**: ~~1个~~ → 0个 ✅ (P2-1 已文档化)
 
 **建议优先级**:
-1. **立即修复**: P0-1（移除deprecated provider访问）
-2. **尽快修复**: P1-1（填充真实telemetry数据），P1-2（移除provider rateLimiter）
-3. **文档化**: P2-1（Gemini abort限制）
+1. ~~**立即修复**: P0-1（移除deprecated provider访问）~~ ✅ 已完成
+2. ~~**尽快修复**: P1-2（移除provider rateLimiter）~~ ✅ 已完成
+3. ~~**尽快修复**: P1-1（填充真实telemetry数据）~~ ✅ 已完成
+4. ~~**文档化**: P2-1（Gemini abort限制）~~ ✅ 已完成
 
 ### 代码质量评估
 
@@ -394,9 +358,9 @@ provider.generateStructuredData/generateBatch (单次请求，无retry)
 - ✅ 持久化策略合理（seeds立即，state节流）
 
 **需要改进**:
-- ⚠️ 遗留的deprecated接口应完全移除
-- ⚠️ Telemetry数据不完整
-- ⚠️ Provider内部仍有重复的rate limit逻辑
+- ~~⚠️ 遗留的deprecated接口应完全移除~~ ✅ 已完成
+- ~~⚠️ Telemetry数据不完整 (P1-1)~~ ✅ 已完成
+- ~~⚠️ Provider内部仍有重复的rate limit逻辑 (P1-2)~~ ✅ 已完成
 
 ---
 

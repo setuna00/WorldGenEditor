@@ -14,8 +14,10 @@ import {
     DEFAULT_PROVIDER_CONFIGS
 } from "../types";
 import { standardToOpenAI } from "../schemaConverter";
-import { getRateLimiter, RateLimiter } from "../rateLimiter";
 import { wrapError } from "../errors";
+
+// NOTE: Rate limiting is now handled exclusively by the Scheduler.
+// Providers should NOT implement their own rate limiting to avoid double-limiting.
 
 // Legacy fallback schema for backward compatibility
 const LEGACY_ENTITY_SCHEMA: StandardSchema = {
@@ -40,7 +42,6 @@ export class OpenAIProvider implements AIProvider {
     
     private client: OpenAI | null = null;
     private modelName: string;
-    private rateLimiter: RateLimiter;
     private apiKey: string;
 
     constructor(config?: Partial<AIProviderConfig>) {
@@ -52,12 +53,6 @@ export class OpenAIProvider implements AIProvider {
                       '';
         
         this.modelName = config?.model || defaults.model || 'gpt-4o-mini';
-        
-        const rateConfig = config?.rateLimit || defaults.rateLimit!;
-        this.rateLimiter = getRateLimiter('OpenAI', {
-            maxRequests: rateConfig.maxRequests,
-            windowMs: rateConfig.windowMs
-        });
 
         if (this.apiKey) {
             this.client = new OpenAI({ 
@@ -103,17 +98,12 @@ export class OpenAIProvider implements AIProvider {
             throw new Error("OpenAI API not configured. Please provide an API key.");
         }
 
-        // Check if already aborted before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         const openaiSchema = standardToOpenAI(schema);
 
@@ -169,17 +159,12 @@ export class OpenAIProvider implements AIProvider {
         const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, !!schema);
         const openaiSchema = standardToOpenAI(schema || LEGACY_ENTITY_SCHEMA);
 
-        // Check for abort before waiting for rate limit
+        // Check if already aborted
         if (signal?.aborted) {
             throw new DOMException('Operation aborted', 'AbortError');
         }
 
-        await this.rateLimiter.enforce();
-
-        // Check again after rate limit wait
-        if (signal?.aborted) {
-            throw new DOMException('Operation aborted', 'AbortError');
-        }
+        // NOTE: Rate limiting is handled by the Scheduler, not here.
 
         try {
             const response = await this.client.chat.completions.create(

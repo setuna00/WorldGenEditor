@@ -4,7 +4,7 @@ import { NexusModal, NexusButton, NexusTextArea, NexusSelect, NexusInput } from 
 import { createAIWorldBuilder, BuildProgress, StoryAnalysis, WorldArchitecture, TitleGenreOption } from '../services/aiWorldBuilder';
 import { useToast } from '../contexts/ToastContext';
 import { useAppSettings } from '../contexts/SettingsContext';
-import { useAIService } from '../contexts/AIServiceContext';
+import { useAIService, useOrchestrator } from '../contexts/AIServiceContext';
 import { useStrings } from '../lib/translations';
 
 interface WorldForgeModalProps {
@@ -18,11 +18,12 @@ type Step = 'IDEATION' | 'ANALYSIS' | 'CONFIG' | 'BUILDING';
 export const WorldForgeModal: React.FC<WorldForgeModalProps> = ({ isOpen, onClose, onSuccess }) => {
     const { toast } = useToast();
     const { settings } = useAppSettings();
-    const { provider: aiProvider, isConfigured: aiIsConfigured } = useAIService();
+    const { isConfigured: aiIsConfigured } = useAIService();
+    const orchestrator = useOrchestrator();
     const { s } = useStrings();
     
-    // Create AIWorldBuilder bound to current provider
-    const AIWorldBuilder = useMemo(() => createAIWorldBuilder(aiProvider), [aiProvider]);
+    // Create AIWorldBuilder bound to orchestrator (NOT direct provider access)
+    const AIWorldBuilder = useMemo(() => createAIWorldBuilder(orchestrator), [orchestrator]);
     
     // State
     const [step, setStep] = useState<Step>('IDEATION');
