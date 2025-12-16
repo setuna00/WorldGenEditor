@@ -15,6 +15,11 @@ import {
 } from "../types";
 import { standardToOpenAI } from "../schemaConverter";
 import { wrapError } from "../errors";
+import { 
+    parseJsonWithSalvage, 
+    normalizeEntity, 
+    buildBatchSystemPrompt 
+} from "./providerUtils";
 
 // NOTE: Rate limiting is now handled exclusively by the Scheduler.
 // Providers should NOT implement their own rate limiting to avoid double-limiting.
@@ -105,36 +110,42 @@ export class OpenAIProvider implements AIProvider {
 
         // NOTE: Rate limiting is handled by the Scheduler, not here.
 
-        const openaiSchema = standardToOpenAI(schema);
+        try {
+            const openaiSchema = standardToOpenAI(schema);
 
-        const response = await this.client.chat.completions.create(
-            {
-                model: this.modelName,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                response_format: {
-                    type: 'json_schema',
-                    json_schema: {
-                        name: 'structured_response',
-                        strict: true,
-                        schema: openaiSchema
-                    }
+            const response = await this.client.chat.completions.create(
+                {
+                    model: this.modelName,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'structured_response',
+                            strict: true,
+                            schema: openaiSchema
+                        }
+                    },
+                    temperature
                 },
-                temperature
-            },
-            { signal }  // Pass AbortSignal to OpenAI SDK
-        );
+                { signal }  // Pass AbortSignal to OpenAI SDK
+            );
 
-        const rawText = response.choices[0]?.message?.content || "{}";
-        const tokens = response.usage?.total_tokens || 0;
+            const rawText = response.choices[0]?.message?.content || "{}";
+            const tokens = response.usage?.total_tokens || 0;
 
-        return {
-            data: JSON.parse(rawText),
-            tokens,
-            raw: rawText
-        };
+            // Use parseJsonWithSalvage for consistent JSON handling
+            return {
+                data: parseJsonWithSalvage(rawText),
+                tokens,
+                raw: rawText
+            };
+        } catch (error: unknown) {
+            // Wrap and throw as LLMError for consistent error handling
+            throw wrapError(error, { provider: this.name, model: this.modelName });
+        }
     }
 
     // ==========================================
@@ -156,7 +167,8 @@ export class OpenAIProvider implements AIProvider {
             throw new Error("OpenAI API not configured. Please provide an API key.");
         }
 
-        const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, !!schema);
+        // Use shared utility for system prompt
+        const systemPrompt = buildBatchSystemPrompt(poolName, count, worldContext, options, !!schema);
         const openaiSchema = standardToOpenAI(schema || LEGACY_ENTITY_SCHEMA);
 
         // Check if already aborted
@@ -188,14 +200,16 @@ export class OpenAIProvider implements AIProvider {
             );
 
             const rawText = response.choices[0]?.message?.content || "[]";
-            let parsedData = this.parseJsonWithSalvage(rawText);
+            // Use shared utility for JSON parsing
+            let parsedData = parseJsonWithSalvage(rawText);
 
             if (!Array.isArray(parsedData)) {
                 throw new Error("Model returned object instead of array.");
             }
 
+            // Use shared utility for entity normalization
             const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
-            return parsedData.map(item => this.normalizeEntity(item, validIds));
+            return parsedData.map(item => normalizeEntity(item, validIds));
 
         } catch (error: unknown) {
             // Wrap and throw as LLMError for consistent error handling
@@ -203,148 +217,5 @@ export class OpenAIProvider implements AIProvider {
         }
     }
 
-    // ==========================================
-    // HELPER METHODS
-    // ==========================================
-
-    private parseJsonWithSalvage(json: string): any {
-        try {
-            return JSON.parse(json);
-        } catch (e) {
-            console.warn("JSON Parse Failed. Attempting salvage...");
-            const salvaged = this.trySalvageJson(json);
-            if (salvaged) return salvaged;
-            throw e;
-        }
-    }
-
-    private trySalvageJson(raw: string): any[] | null {
-        try {
-            const lastObjectEnd = raw.lastIndexOf('},');
-            if (lastObjectEnd === -1) return null;
-
-            const realLastBrace = raw.lastIndexOf('}');
-            if (realLastBrace === -1) return null;
-            
-            const cutString = raw.substring(0, realLastBrace + 1);
-            const closedString = cutString + ']';
-            
-            return JSON.parse(closedString);
-        } catch {
-            return null;
-        }
-    }
-
-    private normalizeEntity(raw: any, validComponentIds?: Set<string>): any {
-        const rawComponents = raw.components || {};
-        const cleanComponents: Record<string, any> = {};
-        const SAFE_COMPONENTS = ['metadata', 'lore', 'rarity', 'relations'];
-
-        Object.keys(rawComponents).forEach(key => {
-            if (validComponentIds) {
-                if (validComponentIds.has(key) || SAFE_COMPONENTS.includes(key)) {
-                    cleanComponents[key] = rawComponents[key];
-                }
-            } else {
-                cleanComponents[key] = rawComponents[key];
-            }
-        });
-
-        return {
-            id: crypto.randomUUID(),
-            name: raw.name || "Unnamed Entity",
-            tags: Array.isArray(raw.tags) ? raw.tags : [],
-            components: {
-                ...cleanComponents,
-                metadata: {
-                    id: crypto.randomUUID(),
-                    created: Date.now(),
-                    rarity: rawComponents.rarity?.value || 'Common',
-                    ...(cleanComponents.metadata || {})
-                }
-            }
-        };
-    }
-
-    private buildSystemPrompt(
-        poolName: string, 
-        count: number, 
-        worldContext: string, 
-        options: GenerationOptions,
-        hasSchema: boolean
-    ): string {
-        const schemaInstruction = hasSchema 
-            ? "STRICTLY FOLLOW the provided JSON schema. Do not invent fields."
-            : "Follow the standard Entity Component System structure.";
-
-        let tagInstruction = "";
-        if (options.language === 'Chinese') {
-            tagInstruction = "- 'tags': Return tags as an array of strings in SIMPLIFIED CHINESE characters. Do NOT use English.\n";
-            tagInstruction += "- TAG FORMAT: You SHOULD include a brief description for new tags using the format 'TagLabel|Description'.";
-        } else {
-            tagInstruction = "- 'tags': Normalize tags to Title Case IDs.\n";
-            tagInstruction += "- TAG FORMAT: You SHOULD include a brief description for new tags using the format 'TagLabel|Description'.";
-        }
-
-        return `
-            You are the 'Nexus Forge' Database Architect.
-            
-            WORLD CONTEXT:
-            ${worldContext}
-            
-            TASK:
-            Generate ${count} distinct Entities for the pool '${poolName}'.
-            
-            ${this.buildCommonPromptSections(options)}
-            
-            CRITICAL INSTRUCTIONS:
-            - ${schemaInstruction}
-            - Output RAW JSON only. No markdown formatting, no conversational text.
-            ${tagInstruction}
-            - Ensure all required fields are present.
-        `;
-    }
-
-    private buildCommonPromptSections(options: GenerationOptions): string {
-        const toneLine = options.toneInstruction 
-            ? `WRITING STYLE: ${options.toneInstruction}` 
-            : `WRITING STYLE: Standard RPG description.`;
-
-        const langInstruction = options.language === 'Chinese' 
-            ? 'OUTPUT LANGUAGE: Chinese (Simplified). Names, Descriptions, and Tags must be in Chinese.'
-            : 'OUTPUT LANGUAGE: English.';
-
-        const lengthInstruction = options.lengthInstruction
-            ? `LENGTH CONSTRAINT: ${options.lengthInstruction} ${options.lengthPerField ? '(Apply to EACH field)' : '(Total budget)'}`
-            : '';
-
-        let tagSection = '';
-        if (options.allowedTags && options.allowedTags.length > 0) {
-            const tagList = options.allowedTags.join(', ');
-            tagSection = options.strictTags 
-                ? `TAGS: STRICTLY use ONLY these tags: [${tagList}].`
-                : `TAGS: Select from: [${tagList}]. You may invent others if necessary.`;
-        } else {
-            tagSection = `TAGS: Assign relevant semantic tags.`;
-        }
-
-        let refSection = '';
-        if (options.contextItems && options.contextItems.length > 0) {
-            refSection = `RELATIONSHIPS: ${options.contextItems.map(r => `Must match "${r.name}" (${r.relationType})`).join(', ')}`;
-        }
-
-        return `
-            ${toneLine}
-            ${lengthInstruction}
-            ${options.rarity && options.rarity !== 'Any' ? `- Rarity: ${options.rarity}` : ''}
-            ${options.attributes?.length ? `- Concepts: ${options.attributes.join(', ')}` : ''}
-            ${options.negativeConstraints?.length ? `- Avoid: ${options.negativeConstraints.join(', ')}` : ''}
-            ${tagSection}
-            ${refSection}
-            ${options.tagDefinitions?.length ? `GLOSSARY:\n${options.tagDefinitions.join('\n')}` : ''}
-            ${langInstruction}
-            NOTE: Where applicable, populate the 'relations' component with connections to other entities.
-        `;
-    }
 }
 

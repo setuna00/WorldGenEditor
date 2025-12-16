@@ -40,6 +40,7 @@ import {
     GenerationParams
 } from './fallbackRouter';
 import { getProvider } from './providers';
+import { emitCallStart, emitCallEnd } from './telemetry';
 
 // ==========================================
 // TYPES
@@ -278,6 +279,8 @@ export class LLMOrchestrator {
         ) => Promise<T>
     ): Promise<OrchestratorResult<T>> {
         const startTime = Date.now();
+        const traceId = options.taskId || `trace-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        
         const telemetry: CallTelemetry = {
             stage: options.stage,
             totalDurationMs: 0,
@@ -314,6 +317,7 @@ export class LLMOrchestrator {
         }
 
         let lastError: LLMError | undefined;
+        let currentModel: string = 'unknown';
 
         // Fallback loop
         while (true) {
@@ -326,6 +330,7 @@ export class LLMOrchestrator {
             }
 
             const providerKey = makeProviderKey(next.providerModel.provider, next.providerModel.model);
+            currentModel = next.providerModel.model;
             telemetry.providersTried.push(providerKey);
             telemetry.providersTriedCount++;
 
@@ -333,6 +338,15 @@ export class LLMOrchestrator {
                 telemetry.usedFallback = true;
                 console.log(`[Orchestrator] Falling back to ${providerKey}: ${next.reason}`);
             }
+
+            // Emit telemetry: call start
+            emitCallStart(
+                next.providerModel.provider,
+                next.providerModel.model,
+                options.stage,
+                options.taskId,
+                traceId
+            );
 
             // Check circuit breaker
             const circuitKey = makeCircuitKey(
@@ -395,6 +409,23 @@ export class LLMOrchestrator {
                 telemetry.success = true;
                 telemetry.totalDurationMs = Date.now() - startTime;
                 
+                // Emit telemetry: call end (success)
+                const lastAttempt = telemetry.attempts[telemetry.attempts.length - 1];
+                emitCallEnd({
+                    provider: next.providerModel.provider,
+                    model: next.providerModel.model,
+                    stage: options.stage,
+                    taskId: options.taskId,
+                    traceId,
+                    success: true,
+                    durationMs: telemetry.totalDurationMs,
+                    rateLimitWaitMs: lastAttempt?.queueWaitMs || 0,
+                    slotWaitMs: lastAttempt?.slotWaitMs || 0,
+                    apiDurationMs: lastAttempt?.apiDurationMs || 0,
+                    attempts: telemetry.totalAttempts,
+                    usedFallback: telemetry.usedFallback
+                });
+                
                 if (options.onTelemetry) {
                     options.onTelemetry(telemetry);
                 }
@@ -446,6 +477,25 @@ export class LLMOrchestrator {
         telemetry.totalDurationMs = Date.now() - startTime;
         telemetry.timedOut = lastError?.category === 'TIMEOUT';
         telemetry.finalError = lastError?.message || 'All providers failed';
+
+        // Emit telemetry: call end (failure)
+        const lastAttempt = telemetry.attempts[telemetry.attempts.length - 1];
+        emitCallEnd({
+            provider: lastError?.provider as AIProviderType || 'gemini',
+            model: currentModel,
+            stage: options.stage,
+            taskId: options.taskId,
+            traceId,
+            success: false,
+            errorCategory: lastError?.category,
+            errorMessage: lastError?.message,
+            durationMs: telemetry.totalDurationMs,
+            rateLimitWaitMs: lastAttempt?.queueWaitMs || 0,
+            slotWaitMs: lastAttempt?.slotWaitMs || 0,
+            apiDurationMs: lastAttempt?.apiDurationMs || 0,
+            attempts: telemetry.totalAttempts,
+            usedFallback: telemetry.usedFallback
+        });
 
         if (options.onTelemetry) {
             options.onTelemetry(telemetry);

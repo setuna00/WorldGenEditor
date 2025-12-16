@@ -3,10 +3,9 @@
  * 
  * Implements the AIProvider interface for Anthropic's Claude API.
  * 
- * NOTE: This provider is currently EXPERIMENTAL and not enabled in the app.
  * Claude's structured output mechanism differs from OpenAI/Gemini:
- * - Uses tool_use or JSON mode instead of json_schema
- * - May require additional schema adaptation
+ * - Uses prompt-based JSON guidance instead of json_schema
+ * - Schema is described in the system prompt
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -19,6 +18,13 @@ import {
     DEFAULT_PROVIDER_CONFIGS
 } from "../types";
 import { wrapError } from "../errors";
+import { 
+    cleanJsonOutput,
+    parseJsonWithSalvage, 
+    normalizeEntity, 
+    buildCommonPromptSections,
+    getTagInstruction
+} from "./providerUtils";
 
 // NOTE: Rate limiting is now handled exclusively by the Scheduler.
 // Providers should NOT implement their own rate limiting to avoid double-limiting.
@@ -109,41 +115,46 @@ export class ClaudeProvider implements AIProvider {
 
         // NOTE: Rate limiting is handled by the Scheduler, not here.
 
-        // Claude uses a different approach for structured output
-        // We include the schema in the prompt and request JSON output
-        const schemaDescription = this.schemaToDescription(schema);
-        const enhancedSystemPrompt = `${systemPrompt}
+        try {
+            // Claude uses a different approach for structured output
+            // We include the schema in the prompt and request JSON output
+            const schemaDescription = this.schemaToDescription(schema);
+            const enhancedSystemPrompt = `${systemPrompt}
 
 You MUST respond with valid JSON that matches this schema:
 ${schemaDescription}
 
 IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
 
-        const response = await this.client.messages.create(
-            {
-                model: this.modelName,
-                max_tokens: 8192,
-                system: enhancedSystemPrompt,
-                messages: [
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature
-            },
-            { signal }  // Pass AbortSignal to Anthropic SDK
-        );
+            const response = await this.client.messages.create(
+                {
+                    model: this.modelName,
+                    max_tokens: 8192,
+                    system: enhancedSystemPrompt,
+                    messages: [
+                        { role: 'user', content: userPrompt }
+                    ],
+                    temperature
+                },
+                { signal }  // Pass AbortSignal to Anthropic SDK
+            );
 
-        // Extract text from response
-        const textContent = response.content.find(c => c.type === 'text');
-        const rawText = textContent?.type === 'text' ? textContent.text : "{}";
-        const tokens = (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
+            // Extract text from response
+            const textContent = response.content.find(c => c.type === 'text');
+            const rawText = textContent?.type === 'text' ? textContent.text : "{}";
+            const tokens = (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
 
-        const cleanJson = this.cleanJsonOutput(rawText);
+            const cleanedJson = cleanJsonOutput(rawText);
 
-        return {
-            data: JSON.parse(cleanJson),
-            tokens,
-            raw: rawText
-        };
+            return {
+                data: parseJsonWithSalvage(cleanedJson),
+                tokens,
+                raw: rawText
+            };
+        } catch (error: unknown) {
+            // Wrap and throw as LLMError for consistent error handling
+            throw wrapError(error, { provider: this.name, model: this.modelName });
+        }
     }
 
     // ==========================================
@@ -166,7 +177,7 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         }
 
         const effectiveSchema = schema || LEGACY_ENTITY_SCHEMA;
-        const systemPrompt = this.buildSystemPrompt(poolName, count, worldContext, options, effectiveSchema);
+        const systemPrompt = this.buildBatchSystemPrompt(poolName, count, worldContext, options, effectiveSchema);
 
         // Check if already aborted
         if (signal?.aborted) {
@@ -192,15 +203,18 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
             // Extract text from response
             const textContent = response.content.find(c => c.type === 'text');
             const rawText = textContent?.type === 'text' ? textContent.text : "[]";
-            const cleanJson = this.cleanJsonOutput(rawText);
-            let parsedData = this.parseJsonWithSalvage(cleanJson);
+            const cleanedJson = cleanJsonOutput(rawText);
+            
+            // Use shared utility for JSON parsing
+            let parsedData = parseJsonWithSalvage(cleanedJson);
 
             if (!Array.isArray(parsedData)) {
                 throw new Error("Model returned object instead of array.");
             }
 
+            // Use shared utility for entity normalization
             const validIds = allowedComponentIds ? new Set(allowedComponentIds) : undefined;
-            return parsedData.map(item => this.normalizeEntity(item, validIds));
+            return parsedData.map(item => normalizeEntity(item, validIds));
 
         } catch (error: unknown) {
             // Wrap and throw as LLMError for consistent error handling
@@ -209,12 +223,12 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
     }
 
     // ==========================================
-    // HELPER METHODS
+    // CLAUDE-SPECIFIC HELPERS
     // ==========================================
 
     /**
-     * Convert StandardSchema to a human-readable description for Claude
-     * Since Claude doesn't support json_schema like OpenAI, we describe it in text
+     * Convert StandardSchema to a human-readable description for Claude.
+     * Since Claude doesn't support json_schema like OpenAI, we describe it in text.
      */
     private schemaToDescription(schema: StandardSchema, indent: string = ''): string {
         let desc = '';
@@ -241,73 +255,11 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         return desc;
     }
 
-    private cleanJsonOutput(text: string): string {
-        let clean = text.trim();
-        // Remove markdown code blocks if present
-        clean = clean.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
-        return clean.trim();
-    }
-
-    private parseJsonWithSalvage(json: string): any {
-        try {
-            return JSON.parse(json);
-        } catch (e) {
-            console.warn("JSON Parse Failed. Attempting salvage...");
-            const salvaged = this.trySalvageJson(json);
-            if (salvaged) return salvaged;
-            throw e;
-        }
-    }
-
-    private trySalvageJson(raw: string): any[] | null {
-        try {
-            const lastObjectEnd = raw.lastIndexOf('},');
-            if (lastObjectEnd === -1) return null;
-
-            const realLastBrace = raw.lastIndexOf('}');
-            if (realLastBrace === -1) return null;
-            
-            const cutString = raw.substring(0, realLastBrace + 1);
-            const closedString = cutString + ']';
-            
-            return JSON.parse(closedString);
-        } catch {
-            return null;
-        }
-    }
-
-    private normalizeEntity(raw: any, validComponentIds?: Set<string>): any {
-        const rawComponents = raw.components || {};
-        const cleanComponents: Record<string, any> = {};
-        const SAFE_COMPONENTS = ['metadata', 'lore', 'rarity', 'relations'];
-
-        Object.keys(rawComponents).forEach(key => {
-            if (validComponentIds) {
-                if (validComponentIds.has(key) || SAFE_COMPONENTS.includes(key)) {
-                    cleanComponents[key] = rawComponents[key];
-                }
-            } else {
-                cleanComponents[key] = rawComponents[key];
-            }
-        });
-
-        return {
-            id: crypto.randomUUID(),
-            name: raw.name || "Unnamed Entity",
-            tags: Array.isArray(raw.tags) ? raw.tags : [],
-            components: {
-                ...cleanComponents,
-                metadata: {
-                    id: crypto.randomUUID(),
-                    created: Date.now(),
-                    rarity: rawComponents.rarity?.value || 'Common',
-                    ...(cleanComponents.metadata || {})
-                }
-            }
-        };
-    }
-
-    private buildSystemPrompt(
+    /**
+     * Build the batch generation system prompt for Claude.
+     * Claude requires schema description in the prompt since it doesn't support json_schema.
+     */
+    private buildBatchSystemPrompt(
         poolName: string, 
         count: number, 
         worldContext: string, 
@@ -315,15 +267,7 @@ IMPORTANT: Output ONLY the JSON, no markdown formatting, no explanations.`;
         schema: StandardSchema
     ): string {
         const schemaDescription = this.schemaToDescription(schema);
-        
-        let tagInstruction = "";
-        if (options.language === 'Chinese') {
-            tagInstruction = "- 'tags': Return tags as an array of strings in SIMPLIFIED CHINESE characters. Do NOT use English.\n";
-            tagInstruction += "- TAG FORMAT: You SHOULD include a brief description for new tags using the format 'TagLabel|Description'.";
-        } else {
-            tagInstruction = "- 'tags': Normalize tags to Title Case IDs.\n";
-            tagInstruction += "- TAG FORMAT: You SHOULD include a brief description for new tags using the format 'TagLabel|Description'.";
-        }
+        const tagInstruction = getTagInstruction(options.language);
 
         return `You are the 'Nexus Forge' Database Architect.
             
@@ -333,7 +277,7 @@ ${worldContext}
 TASK:
 Generate ${count} distinct Entities for the pool '${poolName}'.
 
-${this.buildCommonPromptSections(options)}
+${buildCommonPromptSections(options)}
 
 OUTPUT SCHEMA (STRICTLY FOLLOW):
 ${schemaDescription}
@@ -344,46 +288,5 @@ CRITICAL INSTRUCTIONS:
 ${tagInstruction}
 - Ensure all required fields are present.
 - Return a JSON array of entities.`;
-    }
-
-    private buildCommonPromptSections(options: GenerationOptions): string {
-        const toneLine = options.toneInstruction 
-            ? `WRITING STYLE: ${options.toneInstruction}` 
-            : `WRITING STYLE: Standard RPG description.`;
-
-        const langInstruction = options.language === 'Chinese' 
-            ? 'OUTPUT LANGUAGE: Chinese (Simplified). Names, Descriptions, and Tags must be in Chinese.'
-            : 'OUTPUT LANGUAGE: English.';
-
-        const lengthInstruction = options.lengthInstruction
-            ? `LENGTH CONSTRAINT: ${options.lengthInstruction} ${options.lengthPerField ? '(Apply to EACH field)' : '(Total budget)'}`
-            : '';
-
-        let tagSection = '';
-        if (options.allowedTags && options.allowedTags.length > 0) {
-            const tagList = options.allowedTags.join(', ');
-            tagSection = options.strictTags 
-                ? `TAGS: STRICTLY use ONLY these tags: [${tagList}].`
-                : `TAGS: Select from: [${tagList}]. You may invent others if necessary.`;
-        } else {
-            tagSection = `TAGS: Assign relevant semantic tags.`;
-        }
-
-        let refSection = '';
-        if (options.contextItems && options.contextItems.length > 0) {
-            refSection = `RELATIONSHIPS: ${options.contextItems.map(r => `Must match "${r.name}" (${r.relationType})`).join(', ')}`;
-        }
-
-        return `
-${toneLine}
-${lengthInstruction}
-${options.rarity && options.rarity !== 'Any' ? `- Rarity: ${options.rarity}` : ''}
-${options.attributes?.length ? `- Concepts: ${options.attributes.join(', ')}` : ''}
-${options.negativeConstraints?.length ? `- Avoid: ${options.negativeConstraints.join(', ')}` : ''}
-${tagSection}
-${refSection}
-${options.tagDefinitions?.length ? `GLOSSARY:\n${options.tagDefinitions.join('\n')}` : ''}
-${langInstruction}
-NOTE: Where applicable, populate the 'relations' component with connections to other entities.`;
     }
 }

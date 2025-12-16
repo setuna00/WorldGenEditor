@@ -2,7 +2,7 @@
  * UnifiedScheduler - Task Queue with Rate Limiting, Concurrency Control, and Timeout
  * 
  * Key features:
- * - Per-provider rate limiting with mutex to prevent concurrent race conditions
+ * - Per-provider rate limiting using Bottleneck (reservoir-based)
  * - Global and per-provider concurrency slots
  * - True timeout using AbortController
  * - Abortable waiting (rate limit sleep, queue wait)
@@ -10,8 +10,15 @@
  * 
  * IMPORTANT: Every API attempt (including retries) must go through the scheduler
  * to ensure rate limits and concurrency controls are properly enforced.
+ * 
+ * Uses Bottleneck for rate limiting - a more robust solution that handles:
+ * - Reservoir-based rate limiting (requests per time window)
+ * - Automatic reservoir refresh
+ * - Built-in concurrency control
+ * - Clustering support (for future distributed scenarios)
  */
 
+import Bottleneck from 'bottleneck';
 import { AIProviderType } from './types';
 import { LLMError, createCancelledError, createTimeoutError } from './errors';
 
@@ -91,20 +98,7 @@ export interface SchedulerConfig {
     rateLimitSafetyBufferMs: number;
 }
 
-/**
- * Internal task representation
- */
-interface QueuedTask<T> {
-    id: string;
-    provider: AIProviderType;
-    priority: TaskPriority;
-    execute: (signal: AbortSignal) => Promise<T>;
-    resolve: (result: TaskResult<T>) => void;
-    enqueuedAt: number;
-    timeoutMs: number;
-    externalSignal?: AbortSignal;
-    status: TaskStatus;
-}
+// Note: QueuedTask is no longer needed - Bottleneck handles internal task management
 
 // ==========================================
 // DEFAULT CONFIGURATION
@@ -129,48 +123,34 @@ const DEFAULT_CONFIG: SchedulerConfig = {
 };
 
 // ==========================================
-// MUTEX FOR RATE LIMITER
+// BOTTLENECK LIMITER FACTORY
 // ==========================================
 
 /**
- * Simple mutex to serialize rate limiter access per provider.
- * Prevents multiple tasks from calculating wait time simultaneously
- * which could cause them all to fire at once.
+ * Create a Bottleneck limiter for a provider with the given config.
+ * Uses reservoir-based rate limiting for accurate request counting.
  */
-class Mutex {
-    private locked = false;
-    private queue: Array<() => void> = [];
-
-    async acquire(): Promise<void> {
-        if (!this.locked) {
-            this.locked = true;
-            return;
-        }
-
-        return new Promise<void>(resolve => {
-            this.queue.push(resolve);
-        });
-    }
-
-    release(): void {
-        const next = this.queue.shift();
-        if (next) {
-            next();
-        } else {
-            this.locked = false;
-        }
-    }
-}
-
-// ==========================================
-// RATE LIMITER STATE
-// ==========================================
-
-interface RateLimiterState {
-    /** Request timestamps within the current window */
-    history: number[];
-    /** Mutex for serializing access */
-    mutex: Mutex;
+function createBottleneckLimiter(
+    maxRequests: number,
+    windowMs: number,
+    maxConcurrent: number
+): Bottleneck {
+    return new Bottleneck({
+        // Reservoir: number of requests allowed in the time window
+        reservoir: maxRequests,
+        reservoirRefreshAmount: maxRequests,
+        reservoirRefreshInterval: windowMs,
+        
+        // Concurrency control
+        maxConcurrent: maxConcurrent,
+        
+        // Minimum time between requests (helps with burst protection)
+        minTime: Math.floor(windowMs / maxRequests / 2),
+        
+        // High water mark for queue (prevents unbounded queuing)
+        highWater: 100,
+        strategy: Bottleneck.strategy.OVERFLOW_PRIORITY
+    });
 }
 
 // ==========================================
@@ -180,39 +160,34 @@ interface RateLimiterState {
 export class UnifiedScheduler {
     private config: SchedulerConfig;
     
-    // Rate limiter state per provider
-    private rateLimiters: Map<AIProviderType, RateLimiterState> = new Map();
+    // Bottleneck limiters per provider (handles both rate limiting AND concurrency)
+    private limiters: Map<AIProviderType, Bottleneck> = new Map();
     
-    // Concurrency tracking
-    private globalActiveCount = 0;
-    private providerActiveCount: Map<AIProviderType, number> = new Map();
+    // Global limiter for cross-provider concurrency control
+    private globalLimiter: Bottleneck;
     
-    // Task queue (priority-sorted)
-    private taskQueue: QueuedTask<any>[] = [];
-    
-    // Active tasks
-    private activeTasks: Map<string, QueuedTask<any>> = new Map();
-    
-    // Slot waiters (tasks waiting for concurrency slot)
-    private slotWaiters: Array<{ 
-        provider: AIProviderType; 
-        resolve: () => void; 
-        signal?: AbortSignal;
-    }> = [];
-
     // Task counter for unique IDs
     private taskCounter = 0;
 
     constructor(config?: Partial<SchedulerConfig>) {
         this.config = { ...DEFAULT_CONFIG, ...config };
         
-        // Initialize rate limiters
+        // Initialize global limiter (concurrency only, no rate limit)
+        this.globalLimiter = new Bottleneck({
+            maxConcurrent: this.config.globalMaxConcurrent,
+            minTime: 0
+        });
+        
+        // Initialize per-provider limiters with rate limiting + concurrency
         for (const provider of Object.keys(this.config.rateLimits) as AIProviderType[]) {
-            this.rateLimiters.set(provider, {
-                history: [],
-                mutex: new Mutex()
-            });
-            this.providerActiveCount.set(provider, 0);
+            const rateConfig = this.config.rateLimits[provider];
+            const concurrency = this.config.perProviderMaxConcurrent[provider] || 5;
+            
+            this.limiters.set(provider, createBottleneckLimiter(
+                rateConfig.maxRequests,
+                rateConfig.windowMs,
+                concurrency
+            ));
         }
     }
 
@@ -223,8 +198,8 @@ export class UnifiedScheduler {
     /**
      * Schedule a task for execution.
      * The task will be queued and executed when:
-     * 1. Rate limit allows
-     * 2. Concurrency slot is available
+     * 1. Rate limit allows (via Bottleneck reservoir)
+     * 2. Concurrency slot is available (via Bottleneck maxConcurrent)
      * 
      * @param execute - Async function that performs the actual work.
      *                  Receives an AbortSignal that combines timeout and user cancellation.
@@ -237,10 +212,6 @@ export class UnifiedScheduler {
     ): Promise<TaskResult<T>> {
         const taskId = options.taskId || `task-${++this.taskCounter}`;
         const startTime = Date.now();
-        
-        // Create internal tracking
-        let rateLimitWaitMs = 0;
-        let slotWaitMs = 0;
         
         // Check for external abort before starting
         if (options.signal?.aborted) {
@@ -255,52 +226,61 @@ export class UnifiedScheduler {
             };
         }
 
+        // Get provider-specific limiter
+        const limiter = this.limiters.get(options.provider);
+        if (!limiter) {
+            // Create a default limiter if provider not configured
+            const defaultLimiter = createBottleneckLimiter(50, 60000, 5);
+            this.limiters.set(options.provider, defaultLimiter);
+        }
+
+        const providerLimiter = this.limiters.get(options.provider)!;
+        
+        // Track timing
+        let rateLimitWaitMs = 0;
+        let slotWaitMs = 0;
+        const queueStartTime = Date.now();
+
         try {
-            // === STEP 1: RATE LIMIT WAIT ===
-            const rateLimitStart = Date.now();
-            await this.waitForRateLimit(options.provider, options.signal);
-            rateLimitWaitMs = Date.now() - rateLimitStart;
+            // Use Bottleneck's schedule method which handles:
+            // 1. Rate limiting (reservoir-based)
+            // 2. Concurrency control (maxConcurrent)
+            // 3. Queue management
+            const result = await providerLimiter.schedule(
+                { 
+                    id: taskId,
+                    // Allow abort to cancel queued jobs
+                    signal: options.signal 
+                },
+                async () => {
+                    // Calculate wait times (queue time = rate limit + slot wait combined)
+                    const waitTime = Date.now() - queueStartTime;
+                    // Bottleneck combines rate limit and concurrency, 
+                    // we estimate the split based on reservoir state
+                    const counts = await providerLimiter.currentReservoir();
+                    if (counts !== null && counts === 0) {
+                        // Reservoir was empty, so we waited for rate limit
+                        rateLimitWaitMs = waitTime;
+                    } else {
+                        // Reservoir had capacity, so wait was for concurrency
+                        slotWaitMs = waitTime;
+                    }
 
-            // Check for abort after rate limit wait
-            if (options.signal?.aborted) {
-                return {
-                    success: false,
-                    error: createCancelledError('Task cancelled during rate limit wait', options.provider),
-                    cancelled: true,
-                    timedOut: false,
-                    executionTimeMs: 0,
-                    rateLimitWaitMs,
-                    slotWaitMs: 0
-                };
-            }
+                    // Check for abort after Bottleneck releases us
+                    if (options.signal?.aborted) {
+                        throw new DOMException('Task cancelled while queued', 'AbortError');
+                    }
 
-            // === STEP 2: CONCURRENCY SLOT WAIT ===
-            const slotStart = Date.now();
-            await this.acquireSlot(options.provider, options.signal);
-            slotWaitMs = Date.now() - slotStart;
-
-            // Check for abort after slot acquisition
-            if (options.signal?.aborted) {
-                this.releaseSlot(options.provider);
-                return {
-                    success: false,
-                    error: createCancelledError('Task cancelled while waiting for slot', options.provider),
-                    cancelled: true,
-                    timedOut: false,
-                    executionTimeMs: 0,
-                    rateLimitWaitMs,
-                    slotWaitMs
-                };
-            }
-
-            // === STEP 3: EXECUTE WITH TIMEOUT ===
-            const timeoutMs = options.timeoutMs ?? this.config.defaultTimeoutMs;
-            const result = await this.executeWithTimeout(
-                execute,
-                timeoutMs,
-                options.provider,
-                options.signal,
-                taskId
+                    // Execute with timeout
+                    const timeoutMs = options.timeoutMs ?? this.config.defaultTimeoutMs;
+                    return this.executeWithTimeout(
+                        execute,
+                        timeoutMs,
+                        options.provider,
+                        options.signal,
+                        taskId
+                    );
+                }
             );
 
             return {
@@ -310,11 +290,38 @@ export class UnifiedScheduler {
             };
 
         } catch (error) {
-            // Handle unexpected errors during scheduling (rate limit wait, slot acquisition)
-            // 
-            // IMPORTANT: Scheduler only marks TIMEOUT and CANCELLED.
-            // Other errors are returned as-is for the caller to classify.
+            // Handle Bottleneck-specific errors and general errors
             const executionTimeMs = Date.now() - startTime;
+            
+            // Check if it's an abort error
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                return {
+                    success: false,
+                    error: createCancelledError('Task cancelled', options.provider),
+                    cancelled: true,
+                    timedOut: false,
+                    executionTimeMs,
+                    rateLimitWaitMs,
+                    slotWaitMs
+                };
+            }
+
+            // Check if Bottleneck dropped the job (queue overflow)
+            if (error instanceof Bottleneck.BottleneckError) {
+                return {
+                    success: false,
+                    error: new LLMError(
+                        `Rate limiter queue overflow: ${error.message}`,
+                        'RETRYABLE_TRANSIENT',
+                        { provider: options.provider }
+                    ),
+                    cancelled: false,
+                    timedOut: false,
+                    executionTimeMs,
+                    rateLimitWaitMs,
+                    slotWaitMs
+                };
+            }
             
             if (error instanceof LLMError) {
                 return {
@@ -329,7 +336,6 @@ export class UnifiedScheduler {
             }
 
             // Return raw error as-is - let caller classify using wrapError()
-            // DO NOT default to RETRYABLE_TRANSIENT here!
             const rawError = error instanceof Error ? error : new Error(String(error));
 
             return {
@@ -354,21 +360,31 @@ export class UnifiedScheduler {
         rateLimitStats: Record<AIProviderType, { current: number; max: number }>;
     } {
         const rateLimitStats: Record<string, { current: number; max: number }> = {};
+        const perProviderActive: Record<string, number> = {};
+        let totalQueueLength = 0;
+        let totalActive = 0;
         
-        for (const [provider, state] of this.rateLimiters) {
-            const now = Date.now();
-            const windowMs = this.config.rateLimits[provider].windowMs;
-            const validHistory = state.history.filter(t => now - t < windowMs);
+        for (const [provider, limiter] of this.limiters) {
+            const counts = limiter.counts();
+            const rateConfig = this.config.rateLimits[provider];
+            
+            // Bottleneck counts: RECEIVED, QUEUED, RUNNING, EXECUTING, DONE
+            perProviderActive[provider] = counts.RUNNING + counts.EXECUTING;
+            totalActive += counts.RUNNING + counts.EXECUTING;
+            totalQueueLength += counts.QUEUED;
+            
+            // Estimate reservoir usage from limiter
+            // Note: currentReservoir() is async, so we use a sync approximation
             rateLimitStats[provider] = {
-                current: validHistory.length,
-                max: this.config.rateLimits[provider].maxRequests
+                current: rateConfig.maxRequests - (counts.RECEIVED % rateConfig.maxRequests),
+                max: rateConfig.maxRequests
             };
         }
 
         return {
-            globalActive: this.globalActiveCount,
-            perProviderActive: Object.fromEntries(this.providerActiveCount) as Record<AIProviderType, number>,
-            queueLength: this.taskQueue.length,
+            globalActive: totalActive,
+            perProviderActive: perProviderActive as Record<AIProviderType, number>,
+            queueLength: totalQueueLength,
             rateLimitStats: rateLimitStats as Record<AIProviderType, { current: number; max: number }>
         };
     }
@@ -378,181 +394,57 @@ export class UnifiedScheduler {
      * Useful for testing or after configuration changes.
      */
     reset(): void {
-        for (const state of this.rateLimiters.values()) {
-            state.history = [];
+        // Stop all limiters and clear queues
+        for (const limiter of this.limiters.values()) {
+            limiter.stop({ dropWaitingJobs: true });
         }
-        this.globalActiveCount = 0;
-        for (const provider of this.providerActiveCount.keys()) {
-            this.providerActiveCount.set(provider, 0);
-        }
-        this.taskQueue = [];
-        this.activeTasks.clear();
-    }
-
-    // ==========================================
-    // PRIVATE: RATE LIMITING
-    // ==========================================
-
-    /**
-     * Wait for rate limit to allow a new request.
-     * Uses mutex to prevent concurrent race conditions.
-     */
-    private async waitForRateLimit(
-        provider: AIProviderType,
-        signal?: AbortSignal
-    ): Promise<void> {
-        const state = this.rateLimiters.get(provider);
-        if (!state) return;
-
-        const rateConfig = this.config.rateLimits[provider];
-
-        // Acquire mutex to serialize rate limit checks
-        await state.mutex.acquire();
-
-        try {
-            const now = Date.now();
+        this.limiters.clear();
+        
+        // Re-initialize limiters
+        for (const provider of Object.keys(this.config.rateLimits) as AIProviderType[]) {
+            const rateConfig = this.config.rateLimits[provider];
+            const concurrency = this.config.perProviderMaxConcurrent[provider] || 5;
             
-            // Prune old history
-            state.history = state.history.filter(t => now - t < rateConfig.windowMs);
-
-            // Check if we need to wait
-            if (state.history.length >= rateConfig.maxRequests) {
-                const oldestTime = state.history[0];
-                const expiryTime = oldestTime + rateConfig.windowMs;
-                const waitTime = Math.max(0, expiryTime - now + this.config.rateLimitSafetyBufferMs);
-
-                if (waitTime > 0) {
-                    console.log(
-                        `[Scheduler/${provider}] Rate limit reached (${state.history.length}/${rateConfig.maxRequests}). ` +
-                        `Waiting ${waitTime}ms...`
-                    );
-
-                    // Wait with abort support
-                    await this.abortableSleep(waitTime, signal);
-                }
-            }
-
-            // Record this request BEFORE releasing mutex
-            // This prevents other tasks from also thinking they can proceed
-            state.history.push(Date.now());
-
-        } finally {
-            state.mutex.release();
+            this.limiters.set(provider, createBottleneckLimiter(
+                rateConfig.maxRequests,
+                rateConfig.windowMs,
+                concurrency
+            ));
         }
     }
 
-    // ==========================================
-    // PRIVATE: CONCURRENCY CONTROL
-    // ==========================================
-
     /**
-     * Acquire a concurrency slot (global + per-provider)
+     * Update rate limit configuration for a provider at runtime.
+     * Useful when user changes settings or API tier.
      */
-    private async acquireSlot(
-        provider: AIProviderType,
-        signal?: AbortSignal
-    ): Promise<void> {
-        // Check if slot is immediately available
-        if (this.canAcquireSlot(provider)) {
-            this.incrementSlot(provider);
-            return;
+    updateProviderConfig(
+        provider: AIProviderType, 
+        config: { maxRequests?: number; windowMs?: number; maxConcurrent?: number }
+    ): void {
+        const currentConfig = this.config.rateLimits[provider] || { maxRequests: 50, windowMs: 60000 };
+        const currentConcurrency = this.config.perProviderMaxConcurrent[provider] || 5;
+        
+        const newMaxRequests = config.maxRequests ?? currentConfig.maxRequests;
+        const newWindowMs = config.windowMs ?? currentConfig.windowMs;
+        const newConcurrency = config.maxConcurrent ?? currentConcurrency;
+        
+        // Update stored config
+        this.config.rateLimits[provider] = { maxRequests: newMaxRequests, windowMs: newWindowMs };
+        this.config.perProviderMaxConcurrent[provider] = newConcurrency;
+        
+        // Stop old limiter and create new one
+        const oldLimiter = this.limiters.get(provider);
+        if (oldLimiter) {
+            oldLimiter.stop({ dropWaitingJobs: false });
         }
-
-        // Need to wait for a slot
-        return new Promise<void>((resolve, reject) => {
-            const waiter = { 
-                provider, 
-                resolve, 
-                signal 
-            };
-            
-            // Handle abort while waiting
-            if (signal) {
-                const onAbort = () => {
-                    const idx = this.slotWaiters.indexOf(waiter);
-                    if (idx >= 0) {
-                        this.slotWaiters.splice(idx, 1);
-                    }
-                    reject(createCancelledError('Cancelled while waiting for slot', provider));
-                };
-                
-                if (signal.aborted) {
-                    reject(createCancelledError('Cancelled while waiting for slot', provider));
-                    return;
-                }
-                
-                signal.addEventListener('abort', onAbort, { once: true });
-                
-                // Wrap resolve to clean up listener
-                const originalResolve = resolve;
-                waiter.resolve = () => {
-                    signal.removeEventListener('abort', onAbort);
-                    originalResolve();
-                };
-            }
-            
-            this.slotWaiters.push(waiter);
-        });
-    }
-
-    /**
-     * Check if a slot can be acquired
-     */
-    private canAcquireSlot(provider: AIProviderType): boolean {
-        const globalMax = this.config.globalMaxConcurrent;
-        const providerMax = this.config.perProviderMaxConcurrent[provider] || globalMax;
-        const providerActive = this.providerActiveCount.get(provider) || 0;
-
-        return this.globalActiveCount < globalMax && providerActive < providerMax;
-    }
-
-    /**
-     * Increment slot counters
-     */
-    private incrementSlot(provider: AIProviderType): void {
-        this.globalActiveCount++;
-        this.providerActiveCount.set(
-            provider,
-            (this.providerActiveCount.get(provider) || 0) + 1
-        );
-    }
-
-    /**
-     * Release a concurrency slot and notify waiting tasks
-     */
-    private releaseSlot(provider: AIProviderType): void {
-        this.globalActiveCount = Math.max(0, this.globalActiveCount - 1);
-        this.providerActiveCount.set(
-            provider,
-            Math.max(0, (this.providerActiveCount.get(provider) || 0) - 1)
-        );
-
-        // Notify waiting tasks
-        this.processSlotWaiters();
-    }
-
-    /**
-     * Process waiting tasks when a slot becomes available
-     */
-    private processSlotWaiters(): void {
-        // Find first waiter that can proceed
-        for (let i = 0; i < this.slotWaiters.length; i++) {
-            const waiter = this.slotWaiters[i];
-            
-            // Skip if signal is aborted
-            if (waiter.signal?.aborted) {
-                this.slotWaiters.splice(i, 1);
-                i--;
-                continue;
-            }
-            
-            if (this.canAcquireSlot(waiter.provider)) {
-                this.slotWaiters.splice(i, 1);
-                this.incrementSlot(waiter.provider);
-                waiter.resolve();
-                return;
-            }
-        }
+        
+        this.limiters.set(provider, createBottleneckLimiter(
+            newMaxRequests,
+            newWindowMs,
+            newConcurrency
+        ));
+        
+        console.log(`[Scheduler] Updated ${provider} config: ${newMaxRequests} req/${newWindowMs}ms, ${newConcurrency} concurrent`);
     }
 
     // ==========================================
@@ -562,6 +454,9 @@ export class UnifiedScheduler {
     /**
      * Execute a task with timeout and abort support.
      * Creates a combined signal from timeout and external abort.
+     * 
+     * Note: Bottleneck handles concurrency slot release automatically,
+     * so we don't need manual releaseSlot calls.
      */
     private async executeWithTimeout<T>(
         execute: (signal: AbortSignal) => Promise<T>,
@@ -575,7 +470,7 @@ export class UnifiedScheduler {
         // Create timeout controller
         const timeoutController = new AbortController();
         let timeoutTriggered = false;
-        let timeoutId: NodeJS.Timeout | undefined;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
         // Set up timeout
         timeoutId = setTimeout(() => {
@@ -599,7 +494,6 @@ export class UnifiedScheduler {
         if (externalSignal) {
             if (externalSignal.aborted) {
                 cleanup();
-                this.releaseSlot(provider);
                 return {
                     success: false,
                     error: createCancelledError('Task cancelled', provider),
@@ -624,7 +518,6 @@ export class UnifiedScheduler {
             if (externalSignal) {
                 externalSignal.removeEventListener('abort', onExternalAbort);
             }
-            this.releaseSlot(provider);
 
             return {
                 success: true,
@@ -639,7 +532,6 @@ export class UnifiedScheduler {
             if (externalSignal) {
                 externalSignal.removeEventListener('abort', onExternalAbort);
             }
-            this.releaseSlot(provider);
 
             const executionTimeMs = Date.now() - startTime;
 
@@ -700,38 +592,6 @@ export class UnifiedScheduler {
                 executionTimeMs
             };
         }
-    }
-
-    // ==========================================
-    // PRIVATE: UTILITIES
-    // ==========================================
-
-    /**
-     * Sleep that can be aborted
-     */
-    private abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-        return new Promise<void>((resolve, reject) => {
-            if (signal?.aborted) {
-                reject(createCancelledError('Sleep aborted'));
-                return;
-            }
-
-            const timeoutId = setTimeout(resolve, ms);
-
-            if (signal) {
-                const onAbort = () => {
-                    clearTimeout(timeoutId);
-                    reject(createCancelledError('Sleep aborted'));
-                };
-                signal.addEventListener('abort', onAbort, { once: true });
-                
-                // Clean up listener when timeout completes
-                const originalResolve = resolve;
-                setTimeout(() => {
-                    signal.removeEventListener('abort', onAbort);
-                }, ms);
-            }
-        });
     }
 }
 

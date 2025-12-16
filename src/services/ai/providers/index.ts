@@ -8,8 +8,7 @@ import { AIProvider, AIProviderType, AIProviderConfig } from "../types";
 import { GeminiProvider } from "./gemini";
 import { OpenAIProvider } from "./openai";
 import { DeepSeekProvider } from "./deepseek";
-// Claude provider is experimental - uncomment when ready
-// import { ClaudeProvider } from "./claude";
+import { ClaudeProvider } from "./claude";
 
 // ==========================================
 // PROVIDER FACTORY
@@ -51,9 +50,8 @@ export function createProvider(
         case 'deepseek':
             return new DeepSeekProvider(config);
         
-        // Claude provider is experimental - uncomment when ready
-        // case 'claude':
-        //     return new ClaudeProvider(config);
+        case 'claude':
+            return new ClaudeProvider(config);
         
         default:
             throw new Error(`Unknown provider type: ${type}`);
@@ -72,6 +70,5 @@ export function clearProviderCache(): void {
 export { GeminiProvider } from "./gemini";
 export { OpenAIProvider } from "./openai";
 export { DeepSeekProvider } from "./deepseek";
-// Claude provider is experimental - uncomment when ready
-// export { ClaudeProvider } from "./claude";
+export { ClaudeProvider } from "./claude";
 
